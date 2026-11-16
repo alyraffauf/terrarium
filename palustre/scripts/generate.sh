@@ -1,6 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 cd "$(dirname "$0")/../.."
+go mod download github.com/bluesky-social/indigo
 indigo=$(go list -m -f '{{.Dir}}' github.com/bluesky-social/indigo)
 go tool lexgen \
   --build-file palustre/scripts/lexgen.json \
