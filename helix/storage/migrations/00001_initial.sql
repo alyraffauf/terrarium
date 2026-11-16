@@ -1,0 +1,24 @@
+-- +goose Up
+CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pending (did TEXT PRIMARY KEY, generation INTEGER NOT NULL DEFAULT 1, attempts INTEGER NOT NULL DEFAULT 0, ready INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS targets (actor TEXT PRIMARY KEY, list_uri TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS list_members (actor TEXT NOT NULL, did TEXT NOT NULL, rkey TEXT NOT NULL, PRIMARY KEY(actor,rkey));
+CREATE INDEX IF NOT EXISTS list_members_did ON list_members(did);
+
+CREATE TABLE IF NOT EXISTS follows (did TEXT PRIMARY KEY);
+CREATE INDEX pending_order ON pending(ready,did);
+
+CREATE TABLE sync_state (
+ id INTEGER PRIMARY KEY CHECK (id=1),
+ cursor_us INTEGER NOT NULL DEFAULT 0,
+ stream_seq INTEGER NOT NULL DEFAULT 0,
+ stream_endpoint TEXT NOT NULL DEFAULT '',
+ follow_version INTEGER NOT NULL DEFAULT 0,
+ follow_applied INTEGER NOT NULL DEFAULT -1,
+ rescan_requested INTEGER NOT NULL DEFAULT 0,
+ invalid_frame TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO sync_state(id) VALUES(1);
+CREATE TABLE new_follows (did TEXT PRIMARY KEY);
+
+CREATE TABLE candidates(did TEXT PRIMARY KEY,pds TEXT NOT NULL DEFAULT '');

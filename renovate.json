@@ -1,0 +1,14 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["gomod", "nix", "github-actions", "dockerfile"],
+  "nix": { "enabled": true },
+  "postUpdateOptions": ["gomodTidy"],
+  "lockFileMaintenance": { "enabled": true },
+  "packageRules": [
+    {
+      "matchManagers": ["gomod"],
+      "groupName": "Go dependencies"
+    }
+  ]
+}
