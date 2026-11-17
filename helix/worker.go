@@ -4,18 +4,12 @@ import (
 	"context"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-type progressCounters struct {
-	completed atomic.Uint64
-	retries   atomic.Uint64
-}
-
 // The caller selects at most eight jobs. Public reads overlap, while the caller
 // retains sole ownership of authentication, exclusions, and list writes.
-func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *store, progress *progressCounters) error {
+func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *store) error {
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
@@ -75,15 +69,15 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 			if err := db.retry(ctx, result.work); err != nil {
 				return err
 			}
-			progress.retries.Add(1)
+			api.CheckRetries.Add(1)
 		} else {
-			progress.completed.Add(1)
+			api.ChecksCompleted.Add(1)
 		}
 	}
 	return nil
 }
 
-func logProgress(ctx context.Context, api *session, db *store, progress *progressCounters) {
+func logProgress(ctx context.Context, api *session, db *store) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -98,7 +92,7 @@ func logProgress(ctx context.Context, api *session, db *store, progress *progres
 				}
 				continue
 			}
-			slog.Info("membership progress", "pending", pending, "completed", progress.completed.Load(), "added", api.MembersAdded.Load(), "removed", api.MembersRemoved.Load(), "retries", progress.retries.Load())
+			slog.Info("membership progress", "pending", pending, "completed", api.ChecksCompleted.Load(), "added", api.MembersAdded.Load(), "removed", api.MembersRemoved.Load(), "retries", api.CheckRetries.Load())
 		}
 	}
 }

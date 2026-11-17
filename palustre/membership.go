@@ -148,6 +148,7 @@ func (api *Session) Reconcile(ctx context.Context, db MembershipStore, member Me
 			return err
 		}
 		api.MembersAdded.Add(1)
+		slog.InfoContext(ctx, "list item added", "did", member.DID, "target", member.Target, "list", member.ListURI, "rkey", key)
 	}
 	return nil
 }

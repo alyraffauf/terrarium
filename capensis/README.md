@@ -40,7 +40,15 @@ Restarts resume the saved stream cursor. Expired cursors trigger a new backfill.
 
 To back up the database, stop Capensis before copying it or use SQLite's online backup command.
 
-Successful deletions log `list item removed` with a timestamp, account DID, target, list URI, and record key. The `reason` distinguishes `not_eligible` from `duplicate` cleanup. Keep these logs to retain removal history; they do not recover past removals.
+Successful writes log `list item added` or `list item removed` with a timestamp, account DID, target, list URI, and record key. Removal `reason` distinguishes `not_eligible` from `duplicate` cleanup. Keep these logs to retain membership history.
+
+## Metrics
+
+Set `--metrics-address=:9090` to serve Prometheus metrics at `/metrics`. The listener is disabled by default and has no authentication. Bind to `127.0.0.1:9090` for local-only access.
+
+The endpoint exports `terrarium_pending_accounts`, `terrarium_checks_completed_total`, `terrarium_check_retries_total`, `terrarium_members_added_total`, and `terrarium_members_removed_total`. Counters reset on restart; removals include duplicate cleanup. Metrics contain no account identifiers.
+
+For Helm, set `metrics.enabled=true`. The chart adds a metrics Service and pod scrape annotations on port 9090. Configure your scraper to discover those annotations or the Service. Metrics remain available while membership checks wait on remote servers.
 
 ## Deploy
 

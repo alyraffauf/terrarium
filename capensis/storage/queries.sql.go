@@ -216,6 +216,17 @@ func (q *Queries) NextJob(ctx context.Context, ready int64) (NextJobRow, error) 
 	return i, err
 }
 
+const pendingCount = `-- name: PendingCount :one
+SELECT COUNT(*) FROM pending
+`
+
+func (q *Queries) PendingCount(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, pendingCount)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const queueFollowChanges = `-- name: QueueFollowChanges :exec
 INSERT INTO pending(did)
 SELECT did FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)

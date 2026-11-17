@@ -19,3 +19,7 @@ persistence:
   # null uses the cluster's default storage class; "" disables dynamic provisioning.
   storageClass: null
 resources: {}
+
+metrics:
+  enabled: false
+  port: 9090

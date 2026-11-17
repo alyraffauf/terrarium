@@ -12,6 +12,7 @@ import (
 )
 
 type Config struct {
+	MetricsAddress                                                      string
 	PDS, Identifier, Password, LoginPDS, Slingshot, Jetstream, Database string
 	Targets                                                             []Target
 	RescanInterval                                                      time.Duration

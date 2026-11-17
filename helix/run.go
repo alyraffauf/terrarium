@@ -35,6 +35,11 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	}
 	defer db.Close()
 	api := newSession(cfg, &http.Client{Timeout: 30 * time.Second}, nil)
+	closeMetrics, err := api.StartMetrics(cfg.MetricsAddress, db.queries.PendingCount)
+	if err != nil {
+		return fmt.Errorf("start metrics: %w", err)
+	}
+	defer closeMetrics()
 	if err := api.Login(ctx); err != nil {
 		return err
 	}
@@ -59,8 +64,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	defer cancel()
 	var workers sync.WaitGroup
 	workers.Add(3)
-	progress := &progressCounters{}
-	go func() { defer workers.Done(); logProgress(ctx, api, db, progress) }()
+	go func() { defer workers.Done(); logProgress(ctx, api, db) }()
 	rescan := make(chan struct{}, 1)
 	watched := map[string]bool{}
 	for _, target := range targets {
@@ -134,7 +138,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		for _, row := range jobs {
 			batch = append(batch, job{DID: row.Did, Generation: row.Generation, Attempts: int(row.Attempts)})
 		}
-		if err := processBatch(ctx, targets, batch, db, progress); err != nil {
+		if err := processBatch(ctx, targets, batch, db); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}

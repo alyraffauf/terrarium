@@ -73,10 +73,9 @@ func TestBatchAppliesReadyResultBeforeSlowPDSAndRechecksExclusions(t *testing.T)
 	if err := db.applyFollowSnapshot(ctx, 0, map[string]bool{}); err != nil {
 		t.Fatal(err)
 	}
-	progress := &progressCounters{}
 	done := make(chan error, 1)
 	go func() {
-		done <- processBatch(ctx, targets, []job{{DID: followerDID, Generation: 1}, {DID: secondDID, Generation: 1}}, db, progress)
+		done <- processBatch(ctx, targets, []job{{DID: followerDID, Generation: 1}, {DID: secondDID, Generation: 1}}, db)
 	}()
 	select {
 	case did := <-added:
@@ -103,7 +102,7 @@ func TestBatchAppliesReadyResultBeforeSlowPDSAndRechecksExclusions(t *testing.T)
 		t.Fatalf("added newly followed account %s", did)
 	default:
 	}
-	if progress.completed.Load() != 2 || api.MembersAdded.Load() != 1 {
+	if api.ChecksCompleted.Load() != 2 || api.MembersAdded.Load() != 1 {
 		t.Fatal("incorrect progress counters")
 	}
 }

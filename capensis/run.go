@@ -37,6 +37,11 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	}
 	defer db.Close()
 	api := newSession(cfg, &http.Client{Timeout: 30 * time.Second}, nil)
+	closeMetrics, err := api.StartMetrics(cfg.MetricsAddress, db.queries.PendingCount)
+	if err != nil {
+		return fmt.Errorf("start metrics: %w", err)
+	}
+	defer closeMetrics()
 	if err := api.Login(ctx); err != nil {
 		return err
 	}
@@ -137,6 +142,9 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			if err := db.retry(ctx, work); err != nil {
 				return err
 			}
+			api.CheckRetries.Add(1)
+		} else {
+			api.ChecksCompleted.Add(1)
 		}
 	}
 	return nil

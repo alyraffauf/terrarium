@@ -5,7 +5,7 @@
       pname = "helix";
       version = "0.1.0";
       src = inputs.self;
-      vendorHash = "sha256-bUN9jRE3BSABOGgJd4Sh/QB5NiHEwdfJ33az9yQgu0c=";
+      vendorHash = "sha256-yuhPn9ikgWr2drcyAhV1K6BKgmDBplLWWaTcJKUw13w=";
       subPackages = [ "cmd/helix" ];
       env.CGO_ENABLED = 0;
       ldflags = [ "-s" "-w" ];

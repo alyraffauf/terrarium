@@ -50,12 +50,13 @@ func command() *cobra.Command {
 				Targets: targets, Identifier: config.GetString("identifier"),
 				Password: config.GetString("app-password"), LoginPDS: config.GetString("login-pds"),
 				Slingshot: config.GetString("slingshot"), Jetstream: config.GetString("jetstream"),
-				AppView: config.GetString("appview"), Database: config.GetString("database"), RescanInterval: config.GetDuration("rescan-interval"),
+				AppView: config.GetString("appview"), MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: config.GetDuration("rescan-interval"),
 			}
 			return helix.Run(cmd.Context(), cfg)
 		},
 	}
 	flags := cmd.Flags()
+	flags.String("metrics-address", "", "Prometheus listen address, such as :9090 (disabled by default)")
 	flags.StringSlice("account", nil, "Target account handles or DIDs (repeatable or comma-separated)")
 	flags.StringSlice("list", nil, "Bind ACCOUNT=at://DID/app.bsky.graph.list/record-key (repeatable or comma-separated)")
 	flags.String("identifier", "", "List owner's handle or DID")

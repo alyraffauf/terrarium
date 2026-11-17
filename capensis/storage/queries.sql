@@ -57,3 +57,6 @@ ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0;
 DELETE FROM follows;
 -- name: ReplaceFollows :exec
 INSERT INTO follows SELECT did FROM new_follows;
+
+-- name: PendingCount :one
+SELECT COUNT(*) FROM pending;
