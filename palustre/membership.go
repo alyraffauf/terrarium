@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -114,6 +115,11 @@ func (api *Session) Reconcile(ctx context.Context, db MembershipStore, member Me
 			}
 			if err == nil {
 				api.MembersRemoved.Add(1)
+				reason := "not_eligible"
+				if member.Include {
+					reason = "duplicate"
+				}
+				slog.InfoContext(ctx, "list item removed", "did", member.DID, "target", member.Target, "list", member.ListURI, "rkey", key, "reason", reason)
 			}
 		}
 		if err := db.ForgetMember(ctx, member.Target, key); err != nil {

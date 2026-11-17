@@ -40,6 +40,8 @@ Restarts resume the saved stream cursor. Expired cursors trigger a new backfill.
 
 To back up the database, stop Capensis before copying it or use SQLite's online backup command.
 
+Successful deletions log `list item removed` with a timestamp, account DID, target, list URI, and record key. The `reason` distinguishes `not_eligible` from `duplicate` cleanup. Keep these logs to retain removal history; they do not recover past removals.
+
 ## Deploy
 
 Set `CAPENSIS_IDENTIFIER` and `CAPENSIS_APP_PASSWORD` in your shell first.

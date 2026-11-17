@@ -44,6 +44,8 @@ Helix checks up to eight accounts concurrently and stops reading a candidate's f
 
 To back up the database, stop Helix before copying it or use SQLite's online backup command.
 
+Successful deletions log `list item removed` with a timestamp, account DID, target, list URI, and record key. The `reason` distinguishes `not_eligible` from `duplicate` cleanup. Keep these logs to retain removal history; they do not recover past removals.
+
 ## Deploy
 
 Set `HELIX_IDENTIFIER` and `HELIX_APP_PASSWORD` in your shell first.
