@@ -13,6 +13,16 @@ import (
 
 // Only complete snapshots may replace exclusions or drive membership removals.
 func FetchFollows(ctx context.Context, client *xrpc.Client, did string) (map[string]bool, error) {
+	return fetchFollows(ctx, client, did, nil)
+}
+
+// FetchTargetFollows stops once every requested target is found. Missing targets
+// are absent only after all pages have been read successfully.
+func FetchTargetFollows(ctx context.Context, client *xrpc.Client, did string, targets map[string]bool) (map[string]bool, error) {
+	return fetchFollows(ctx, client, did, targets)
+}
+
+func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets map[string]bool) (map[string]bool, error) {
 	follows := make(map[string]bool)
 	cursor := ""
 	for {
@@ -41,7 +51,12 @@ func FetchFollows(ctx context.Context, client *xrpc.Client, did string) (map[str
 				slog.Warn("skipping invalid follow subject", "error", err)
 				continue
 			}
-			follows[follow.Subject] = true
+			if targets == nil || targets[follow.Subject] {
+				follows[follow.Subject] = true
+			}
+			if len(targets) > 0 && len(follows) == len(targets) {
+				return follows, nil
+			}
 		}
 		if page.Cursor == "" {
 			break

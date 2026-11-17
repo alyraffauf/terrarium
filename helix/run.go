@@ -2,7 +2,6 @@ package helix
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -59,7 +58,9 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var workers sync.WaitGroup
-	workers.Add(2)
+	workers.Add(3)
+	progress := &progressCounters{}
+	go func() { defer workers.Done(); logProgress(ctx, api, db, progress) }()
 	rescan := make(chan struct{}, 1)
 	watched := map[string]bool{}
 	for _, target := range targets {
@@ -119,27 +120,25 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			slog.Error("list inventory failed", "error", err)
 		}
 
-		work, err := db.next(ctx)
-		if errors.Is(err, sql.ErrNoRows) {
+		jobs, err := db.queries.NextJobs(ctx, time.Now().Unix())
+		if err != nil {
+			return err
+		}
+		if len(jobs) == 0 {
 			if !pause(ctx, time.Second) {
 				break
 			}
 			continue
 		}
-		if err != nil {
+		batch := make([]job, 0, len(jobs))
+		for _, row := range jobs {
+			batch = append(batch, job{DID: row.Did, Generation: row.Generation, Attempts: int(row.Attempts)})
+		}
+		if err := processBatch(ctx, targets, batch, db, progress); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return err
-		}
-		if err := reconcileTargets(ctx, targets, work, db); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			slog.Warn("membership update failed", "did", work.DID, "error", err)
-			if err := db.retry(ctx, work); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
@@ -203,14 +202,7 @@ func (api *session) prepareTargets(ctx context.Context, db *store) ([]*listTarge
 	return targets, nil
 }
 
-func reconcileTargets(ctx context.Context, targets []*listTarget, work job, db *store) error {
-	if len(targets) == 0 {
-		return db.finish(ctx, work)
-	}
-	subject, err := targets[0].subject(ctx, db, work.DID)
-	if err != nil {
-		return err
-	}
+func applySubject(ctx context.Context, targets []*listTarget, work job, subject subjectState, db *store) error {
 	var failures []error
 	for _, target := range targets {
 		if err := target.reconcileSubject(ctx, subject, db); err != nil {

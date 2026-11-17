@@ -325,3 +325,18 @@ func TestListBindingsUseResolvedDIDs(t *testing.T) {
 		t.Fatal("duplicate target DID accepted")
 	}
 }
+
+func reconcileTargets(ctx context.Context, targets []*listTarget, work job, db *store) error {
+	if len(targets) == 0 {
+		return db.finish(ctx, work)
+	}
+	actors := make([]string, 0, len(targets))
+	for _, target := range targets {
+		actors = append(actors, target.actor)
+	}
+	subject, err := targets[0].subject(ctx, db, work.DID, actors...)
+	if err != nil {
+		return err
+	}
+	return applySubject(ctx, targets, work, subject, db)
+}

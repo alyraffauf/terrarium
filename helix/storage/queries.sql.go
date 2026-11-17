@@ -238,6 +238,50 @@ func (q *Queries) NextJob(ctx context.Context, ready int64) (NextJobRow, error) 
 	return i, err
 }
 
+const nextJobs = `-- name: NextJobs :many
+SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 8
+`
+
+type NextJobsRow struct {
+	Did        string
+	Generation int64
+	Attempts   int64
+}
+
+func (q *Queries) NextJobs(ctx context.Context, ready int64) ([]NextJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, nextJobs, ready)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []NextJobsRow{}
+	for rows.Next() {
+		var i NextJobsRow
+		if err := rows.Scan(&i.Did, &i.Generation, &i.Attempts); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pendingCount = `-- name: PendingCount :one
+SELECT COUNT(*) FROM pending
+`
+
+func (q *Queries) PendingCount(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, pendingCount)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const queueFollowChanges = `-- name: QueueFollowChanges :exec
 INSERT INTO pending(did)
 SELECT did FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)

@@ -112,6 +112,9 @@ func (api *Session) Reconcile(ctx context.Context, db MembershipStore, member Me
 			if err != nil && !XRPCCode(err, "RecordNotFound") {
 				return err
 			}
+			if err == nil {
+				api.MembersRemoved.Add(1)
+			}
 		}
 		if err := db.ForgetMember(ctx, member.Target, key); err != nil {
 			return err
@@ -138,6 +141,7 @@ func (api *Session) Reconcile(ctx context.Context, db MembershipStore, member Me
 		if err := api.Put(ctx, ItemCollection, key, &lexutil.LexiconTypeDecoder{Val: item}); err != nil {
 			return err
 		}
+		api.MembersAdded.Add(1)
 	}
 	return nil
 }

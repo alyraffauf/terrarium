@@ -40,6 +40,8 @@ Helix backfills followers from the AppView at startup and every `--rescan-interv
 
 Owner follow and unfollow events refresh exclusions, with a five-minute fallback. Failed exclusion fetches pause membership changes until a complete snapshot succeeds. Restarts resume the saved stream cursor, and periodic backfills recover missed changes. Backfill completeness depends on the AppView's follower index.
 
+Helix checks up to eight accounts concurrently and stops reading a candidate's follows once all target accounts are found. List writes remain serialized. Once a minute, `membership progress` logs the pending count and process totals for completed checks, additions, removals, and retries. Pending includes in-flight checks and delayed retries.
+
 To back up the database, stop Helix before copying it or use SQLite's online backup command.
 
 ## Deploy

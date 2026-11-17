@@ -47,7 +47,7 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 	}
 }
 
-func (api *session) subject(ctx context.Context, db *store, did string) (subjectState, error) {
+func (api *session) subject(ctx context.Context, db *store, did string, targets ...string) (subjectState, error) {
 	subject := subjectState{did: did}
 	followed, err := db.isFollowed(ctx, did)
 	if err != nil {
@@ -81,6 +81,10 @@ func (api *session) subject(ctx context.Context, db *store, did string) (subject
 	if resolveErr != nil {
 		return subject, resolveErr
 	}
-	subject.follows, err = palustre.FetchFollows(ctx, client, did)
+	watched := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		watched[target] = true
+	}
+	subject.follows, err = palustre.FetchTargetFollows(ctx, client, did, watched)
 	return subject, err
 }

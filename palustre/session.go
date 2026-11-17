@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -24,11 +25,13 @@ type MiniDoc struct {
 
 // session owns authentication and the write limiter shared by every list.
 type Session struct {
-	Config    Config
-	HTTP      *http.Client
-	Client    *xrpc.Client
-	Refreshed time.Time
-	LastWrite time.Time
+	Config         Config
+	HTTP           *http.Client
+	Client         *xrpc.Client
+	Refreshed      time.Time
+	LastWrite      time.Time
+	MembersAdded   atomic.Uint64
+	MembersRemoved atomic.Uint64
 }
 
 func (api *Session) Resolve(ctx context.Context, identifier string) (MiniDoc, error) {

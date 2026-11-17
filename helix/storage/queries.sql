@@ -69,3 +69,8 @@ SELECT EXISTS(SELECT did FROM candidates WHERE candidates.did=sqlc.arg(did) UNIO
 
 -- name: SaveListName :exec
 INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+
+-- name: NextJobs :many
+SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 8;
+-- name: PendingCount :one
+SELECT COUNT(*) FROM pending;

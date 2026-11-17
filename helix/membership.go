@@ -89,7 +89,7 @@ type subjectState struct {
 }
 
 func (api *listTarget) reconcile(ctx context.Context, work job, db *store) error {
-	subject, err := api.subject(ctx, db, work.DID)
+	subject, err := api.subject(ctx, db, work.DID, api.actor)
 	if err != nil {
 		return err
 	}
