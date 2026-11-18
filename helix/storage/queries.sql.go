@@ -295,7 +295,7 @@ func (q *Queries) QueueFollowChanges(ctx context.Context) error {
 }
 
 const queueMembers = `-- name: QueueMembers :exec
-INSERT INTO pending(did,ready) SELECT DISTINCT did,unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO NOTHING
+INSERT INTO pending(did,ready) SELECT DISTINCT did,unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1
 `
 
 func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
@@ -304,7 +304,7 @@ func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
 }
 
 const queueScan = `-- name: QueueScan :exec
-INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO NOTHING
+INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1
 `
 
 func (q *Queries) QueueScan(ctx context.Context, did string) error {

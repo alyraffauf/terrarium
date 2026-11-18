@@ -27,9 +27,9 @@ INSERT INTO targets(actor,list_uri) VALUES(?,?);
 -- name: EnqueueEvent :exec
 INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1;
 -- name: QueueScan :exec
-INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO NOTHING;
+INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1;
 -- name: QueueMembers :exec
-INSERT INTO pending(did,ready) SELECT DISTINCT did,unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO NOTHING;
+INSERT INTO pending(did,ready) SELECT DISTINCT did,unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1;
 -- name: NextJob :one
 SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 1;
 -- name: FinishJob :exec
