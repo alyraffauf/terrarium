@@ -4,14 +4,14 @@ SELECT * FROM sync_state WHERE id=1;
 UPDATE sync_state SET cursor_us=? WHERE id=1 AND cursor_us=0;
 -- name: SaveCheckpoint :exec
 UPDATE sync_state SET cursor_us=MAX(cursor_us,CAST(sqlc.arg(cursor_us) AS INTEGER)),
- stream_seq=CASE WHEN CAST(sqlc.arg(seq) AS INTEGER)>0 THEN CAST(sqlc.arg(seq) AS INTEGER) ELSE stream_seq END,
- stream_endpoint=CASE WHEN CAST(sqlc.arg(seq) AS INTEGER)>0 THEN sqlc.arg(endpoint) ELSE stream_endpoint END WHERE id=1;
+ stream_seq=CASE WHEN CAST(sqlc.arg(seq) AS INTEGER)>0 AND (sqlc.arg(endpoint)<>stream_endpoint OR CAST(sqlc.arg(seq) AS INTEGER)>stream_seq) THEN CAST(sqlc.arg(seq) AS INTEGER) ELSE stream_seq END,
+ stream_endpoint=CASE WHEN CAST(sqlc.arg(seq) AS INTEGER)>0 AND (sqlc.arg(endpoint)<>stream_endpoint OR CAST(sqlc.arg(seq) AS INTEGER)>stream_seq) THEN sqlc.arg(endpoint) ELSE stream_endpoint END WHERE id=1;
 -- name: DirtyFollows :exec
 UPDATE sync_state SET follow_version=follow_version+1 WHERE id=1;
 -- name: ResetStream :exec
 UPDATE sync_state SET stream_seq=0,stream_endpoint='',cursor_us=?,follow_version=follow_version+1 WHERE id=1;
 -- name: RecoverStream :exec
-UPDATE sync_state SET stream_seq=?,stream_endpoint=?,invalid_frame=?,rescan_requested=1,follow_version=follow_version+1 WHERE id=1;
+UPDATE sync_state SET stream_seq=CASE WHEN CAST(sqlc.arg(stream_seq) AS INTEGER)>0 AND (sqlc.arg(stream_endpoint)<>stream_endpoint OR CAST(sqlc.arg(stream_seq) AS INTEGER)>stream_seq) THEN CAST(sqlc.arg(stream_seq) AS INTEGER) ELSE stream_seq END,stream_endpoint=CASE WHEN CAST(sqlc.arg(stream_seq) AS INTEGER)>0 AND (sqlc.arg(stream_endpoint)<>stream_endpoint OR CAST(sqlc.arg(stream_seq) AS INTEGER)>stream_seq) THEN sqlc.arg(stream_endpoint) ELSE stream_endpoint END,invalid_frame=sqlc.arg(invalid_frame),rescan_requested=1,follow_version=follow_version+1 WHERE id=1;
 -- name: TakeRescan :one
 UPDATE sync_state SET rescan_requested=0 WHERE id=1 AND rescan_requested=1 RETURNING id;
 -- name: ApplyFollowVersion :exec

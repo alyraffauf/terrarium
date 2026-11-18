@@ -313,7 +313,7 @@ func (q *Queries) QueueScan(ctx context.Context, did string) error {
 }
 
 const recoverStream = `-- name: RecoverStream :exec
-UPDATE sync_state SET stream_seq=?,stream_endpoint=?,invalid_frame=?,rescan_requested=1,follow_version=follow_version+1 WHERE id=1
+UPDATE sync_state SET stream_seq=CASE WHEN CAST(?1 AS INTEGER)>0 AND (?2<>stream_endpoint OR CAST(?1 AS INTEGER)>stream_seq) THEN CAST(?1 AS INTEGER) ELSE stream_seq END,stream_endpoint=CASE WHEN CAST(?1 AS INTEGER)>0 AND (?2<>stream_endpoint OR CAST(?1 AS INTEGER)>stream_seq) THEN ?2 ELSE stream_endpoint END,invalid_frame=?3,rescan_requested=1,follow_version=follow_version+1 WHERE id=1
 `
 
 type RecoverStreamParams struct {
@@ -400,8 +400,8 @@ func (q *Queries) SaveCandidatePDS(ctx context.Context, arg SaveCandidatePDSPara
 
 const saveCheckpoint = `-- name: SaveCheckpoint :exec
 UPDATE sync_state SET cursor_us=MAX(cursor_us,CAST(?1 AS INTEGER)),
- stream_seq=CASE WHEN CAST(?2 AS INTEGER)>0 THEN CAST(?2 AS INTEGER) ELSE stream_seq END,
- stream_endpoint=CASE WHEN CAST(?2 AS INTEGER)>0 THEN ?3 ELSE stream_endpoint END WHERE id=1
+ stream_seq=CASE WHEN CAST(?2 AS INTEGER)>0 AND (?3<>stream_endpoint OR CAST(?2 AS INTEGER)>stream_seq) THEN CAST(?2 AS INTEGER) ELSE stream_seq END,
+ stream_endpoint=CASE WHEN CAST(?2 AS INTEGER)>0 AND (?3<>stream_endpoint OR CAST(?2 AS INTEGER)>stream_seq) THEN ?3 ELSE stream_endpoint END WHERE id=1
 `
 
 type SaveCheckpointParams struct {
