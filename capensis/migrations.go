@@ -8,6 +8,7 @@ import (
 	"github.com/pressly/goose/v3"
 
 	"github.com/alyraffauf/terrarium/capensis/storage"
+	"github.com/alyraffauf/terrarium/palustre"
 )
 
 func migrate(db *sql.DB) error {
@@ -23,6 +24,9 @@ func migrate(db *sql.DB) error {
 		// saved PDS keys needs its own upgrade.
 		goose.NewGoMigration(3, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
 			return canonicalizeTargetKeys(tx)
+		}}, nil),
+		goose.NewGoMigration(4, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
+			return canonicalizeStreamEndpoint(tx)
 		}}, nil),
 	))
 	if err != nil {
@@ -216,4 +220,36 @@ func canonicalizeTargetKeys(tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// canonicalizeStreamEndpoint rewrites a checkpoint endpoint saved under
+// a pre-canonicalization spelling. Unparseable values are left alone:
+// resume falls back to the portable timestamp cursor for them.
+func canonicalizeStreamEndpoint(tx *sql.Tx) error {
+	var exists bool
+	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sync_state')`).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	var endpoint string
+	if err := tx.QueryRow(`SELECT stream_endpoint FROM sync_state WHERE id=1`).Scan(&endpoint); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if endpoint == "" {
+		return nil
+	}
+	canonical, err := palustre.NormalizeJetstream(endpoint)
+	if err != nil {
+		return nil
+	}
+	if canonical == endpoint {
+		return nil
+	}
+	_, err = tx.Exec(`UPDATE sync_state SET stream_endpoint=? WHERE id=1`, canonical)
+	return err
 }

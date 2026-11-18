@@ -109,18 +109,10 @@ func (cfg *Config) validate() error {
 			return err
 		}
 	}
-	cfg.Jetstream = strings.Replace(strings.Replace(cfg.Jetstream, "https://", "wss://", 1), "http://", "ws://", 1)
-	stream, err := url.Parse(cfg.Jetstream)
-	if err != nil || stream.Host == "" || (stream.Scheme != "ws" && stream.Scheme != "wss") || stream.User != nil {
-		return fmt.Errorf("jetstream must be a ws:// or wss:// URL")
+	cfg.Jetstream, err = palustre.NormalizeJetstream(cfg.Jetstream)
+	if err != nil {
+		return err
 	}
-	if stream.Path == "" || stream.Path == "/" {
-		stream.Path = streamPath
-	}
-	if stream.Path != streamPath || stream.RawQuery != "" || stream.Fragment != "" {
-		return fmt.Errorf("jetstream must be a base URL or the v2 subscribeEvents URL without query parameters")
-	}
-	cfg.Jetstream = stream.String()
 	if cfg.RescanInterval <= 0 {
 		return fmt.Errorf("rescan-interval must be positive")
 	}

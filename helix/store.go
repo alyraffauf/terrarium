@@ -10,6 +10,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/alyraffauf/terrarium/helix/storage"
+	"github.com/alyraffauf/terrarium/palustre"
 )
 
 type store struct {
@@ -142,7 +143,7 @@ func (db *store) resumeCursor(ctx context.Context, endpoint string) (int64, erro
 	if err != nil {
 		return 0, err
 	}
-	if state.StreamEndpoint == endpoint && state.StreamSeq > 0 {
+	if palustre.StreamEndpointsEqual(state.StreamEndpoint, endpoint) && state.StreamSeq > 0 {
 		return state.StreamSeq, nil
 	}
 	return max(0, state.CursorUs-5_000_000), nil
