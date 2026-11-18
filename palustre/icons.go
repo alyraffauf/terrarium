@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -61,43 +62,105 @@ func (api *Session) FetchIcon(ctx context.Context, endpoint string) ([]byte, err
 	return normalizeIcon(data)
 }
 
-func normalizeIcon(data []byte) (normalized []byte, err error) {
-	// The ICO codec can panic on malformed bitmap headers. A bad remote icon must not stop the worker.
+// icoCandidate locates one ICO entry without copying its payload. A
+// directory may name 256 entries overlapping the same bytes; retaining
+// every payload would expand a bounded download by orders of magnitude.
+type icoCandidate struct {
+	area   int
+	size   uint32
+	offset uint32
+	entry  [16]byte
+}
+
+func icoCandidates(data []byte) ([]icoCandidate, error) {
+	count := int(binary.LittleEndian.Uint16(data[4:6]))
+	if count == 0 || count > 256 || len(data) < 6+16*count {
+		return nil, fmt.Errorf("invalid ICO directory")
+	}
+	var candidates []icoCandidate
+	for i := 0; i < count; i++ {
+		var candidate icoCandidate
+		copy(candidate.entry[:], data[6+i*16:6+(i+1)*16])
+		width, height := int(candidate.entry[0]), int(candidate.entry[1])
+		if width == 0 {
+			width = 256
+		}
+		if height == 0 {
+			height = 256
+		}
+		candidate.area = width * height
+		candidate.size = binary.LittleEndian.Uint32(candidate.entry[8:12])
+		candidate.offset = binary.LittleEndian.Uint32(candidate.entry[12:16])
+		if candidate.size == 0 || uint64(candidate.offset)+uint64(candidate.size) > uint64(len(data)) {
+			continue
+		}
+		candidates = append(candidates, candidate)
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("invalid ICO image bounds")
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].area > candidates[j].area })
+	return candidates, nil
+}
+
+// plausibleICOEntry reports whether a payload can be handed to the ICO
+// codec: a PNG, or a BMP DIB long enough for the codec's forged header
+// (it reads 36 bytes unconditionally and panics on shorter payloads).
+func plausibleICOEntry(payload []byte) bool {
+	if bytes.HasPrefix(payload, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}) {
+		return true
+	}
+	if len(payload) < 40 {
+		return false
+	}
+	switch dib := binary.LittleEndian.Uint32(payload[:4]); dib {
+	case 12, 16, 40, 52, 56, 108, 124:
+		return int(dib) <= len(payload)
+	}
+	return false
+}
+
+func normalizeIcon(data []byte) ([]byte, error) {
+	// Decode ICO entries largest first, and fall back when an entry is
+	// corrupt. Only offsets are retained from the directory; a single
+	// entry is materialized at decode time.
+	if len(data) >= 6 && bytes.Equal(data[:4], []byte{0, 0, 1, 0}) {
+		candidates, err := icoCandidates(data)
+		if err != nil {
+			return nil, err
+		}
+		var lastErr error
+		for _, candidate := range candidates {
+			payload := data[candidate.offset : candidate.offset+candidate.size]
+			if !plausibleICOEntry(payload) {
+				lastErr = fmt.Errorf("invalid ICO entry payload")
+				continue
+			}
+			entry := candidate.entry
+			binary.LittleEndian.PutUint32(entry[12:16], 22)
+			selected := append([]byte{0, 0, 1, 0, 1, 0}, entry[:]...)
+			selected = append(selected, payload...)
+			rendered, renderErr := renderIcon(selected)
+			if renderErr == nil {
+				return rendered, nil
+			}
+			lastErr = renderErr
+		}
+		return nil, lastErr
+	}
+	return renderIcon(data)
+}
+
+// renderIcon renders one image. The ICO codec can panic on malformed
+// bitmap headers, so a panic is recovered per image: one bad entry must
+// neither stop the worker nor discard other entries of the same file.
+func renderIcon(data []byte) (normalized []byte, err error) {
 	defer func() {
 		if failure := recover(); failure != nil {
 			normalized = nil
 			err = fmt.Errorf("invalid icon: %v", failure)
 		}
 	}()
-	// Decode only one ICO entry, bounding its allocation before handing it to the codec.
-	if len(data) >= 6 && bytes.Equal(data[:4], []byte{0, 0, 1, 0}) {
-		count := int(binary.LittleEndian.Uint16(data[4:6]))
-		if count == 0 || count > 256 || len(data) < 6+16*count {
-			return nil, fmt.Errorf("invalid ICO directory")
-		}
-		best, area := -1, 0
-		for i := 0; i < count; i++ {
-			entry := data[6+i*16 : 6+(i+1)*16]
-			width, height := int(entry[0]), int(entry[1])
-			if width == 0 {
-				width = 256
-			}
-			if height == 0 {
-				height = 256
-			}
-			if width*height > area {
-				best, area = i, width*height
-			}
-		}
-		entry := append([]byte(nil), data[6+best*16:6+(best+1)*16]...)
-		size, offset := uint64(binary.LittleEndian.Uint32(entry[8:12])), uint64(binary.LittleEndian.Uint32(entry[12:16]))
-		if size == 0 || offset+size > uint64(len(data)) {
-			return nil, fmt.Errorf("invalid ICO image bounds")
-		}
-		binary.LittleEndian.PutUint32(entry[12:16], 22)
-		selected := append([]byte{0, 0, 1, 0, 1, 0}, entry...)
-		data = append(selected, data[offset:offset+size]...)
-	}
 	config, _, err := image.DecodeConfig(bytes.NewReader(data))
 	if err != nil {
 		return nil, err
