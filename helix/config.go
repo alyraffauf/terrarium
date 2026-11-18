@@ -45,6 +45,7 @@ func ParseTargets(accounts, bindings []string) ([]Target, error) {
 	for _, value := range bindings {
 		for _, entry := range strings.Split(value, ",") {
 			actor, uri, ok := strings.Cut(strings.TrimSpace(entry), "=")
+			actor, uri = strings.TrimSpace(actor), strings.TrimSpace(uri)
 			if !ok || uri == "" {
 				return nil, fmt.Errorf("--list expects ACCOUNT=at://DID/app.bsky.graph.list/record-key")
 			}

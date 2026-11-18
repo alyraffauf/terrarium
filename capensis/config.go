@@ -45,6 +45,7 @@ func ParseTargets(pdses, bindings []string) ([]Target, error) {
 	for _, value := range bindings {
 		for _, entry := range strings.Split(value, ",") {
 			pds, uri, ok := strings.Cut(strings.TrimSpace(entry), "=")
+			pds, uri = strings.TrimSpace(pds), strings.TrimSpace(uri)
 			if !ok || uri == "" {
 				return nil, fmt.Errorf("--list expects PDS=at://DID/app.bsky.graph.list/record-key")
 			}
