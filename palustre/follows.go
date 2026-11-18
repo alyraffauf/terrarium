@@ -24,6 +24,7 @@ func FetchTargetFollows(ctx context.Context, client *xrpc.Client, did string, ta
 
 func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets map[string]bool) (map[string]bool, error) {
 	follows := make(map[string]bool)
+	seen := make(map[string]bool)
 	cursor := ""
 	for {
 		var page struct {
@@ -61,9 +62,10 @@ func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets 
 		if page.Cursor == "" {
 			break
 		}
-		if cursor == page.Cursor {
+		if seen[page.Cursor] {
 			return nil, fmt.Errorf("follow inventory repeated pagination cursor")
 		}
+		seen[page.Cursor] = true
 		cursor = page.Cursor
 	}
 	return follows, nil

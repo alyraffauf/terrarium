@@ -226,6 +226,7 @@ type inventoryScan struct {
 	next   time.Time
 	lists  map[string]*listTarget
 	checks map[string]time.Time
+	seen   map[string]bool
 }
 
 func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *store) error {
@@ -250,6 +251,7 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 			return nil
 		}
 		scan.lists = map[string]*listTarget{}
+		scan.seen = map[string]bool{}
 		for _, api := range targets {
 			scan.lists[api.listURI] = api
 		}
@@ -286,7 +288,8 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 		}
 	}
 	if err == nil && page.Cursor != nil && *page.Cursor != "" {
-		if *page.Cursor != scan.cursor {
+		if !scan.seen[*page.Cursor] {
+			scan.seen[*page.Cursor] = true
 			scan.cursor = *page.Cursor
 			return nil
 		}
@@ -294,6 +297,7 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 	}
 	scan.cursor = ""
 	scan.lists = nil
+	scan.seen = nil
 	delay := api.rescanInterval
 	if err != nil {
 		delay = time.Minute

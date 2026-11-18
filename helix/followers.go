@@ -17,6 +17,7 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 		return err
 	}
 	client := &xrpc.Client{Host: api.cfg.AppView, Client: api.HTTP}
+	seen := map[string]bool{}
 	cursor := ""
 	for {
 		var page struct {
@@ -40,9 +41,10 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 		if page.Cursor == nil || *page.Cursor == "" {
 			return nil
 		}
-		if *page.Cursor == cursor {
+		if seen[*page.Cursor] {
 			return fmt.Errorf("follower backfill repeated pagination cursor")
 		}
+		seen[*page.Cursor] = true
 		cursor = *page.Cursor
 	}
 }
