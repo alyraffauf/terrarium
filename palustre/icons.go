@@ -10,10 +10,13 @@ import (
 	_ "image/jpeg"
 	"image/png"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -30,12 +33,143 @@ import (
 
 const maxIconDownload = 4 << 20
 
-func (api *Session) fetchIconBytes(ctx context.Context, endpoint string, limit int64) ([]byte, *url.URL, error) {
+// Icon URLs found in remote content (a page's icon link, a profile
+// avatar field, a redirect target) are not operator configuration, so
+// they may only reach public addresses. The one exception is the host
+// of the operator-configured source that produced them, which stays
+// reachable even on a private network (a self-hosted PDS, a test
+// server). Resolution is rechecked at dial time so a name cannot pass
+// validation and then resolve somewhere private.
+func isPublicIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return false
+	}
+	for _, prefix := range []string{"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "198.18.0.0/15"} {
+		address, ok := netip.AddrFromSlice(ip)
+		if ok && netip.MustParsePrefix(prefix).Contains(address.Unmap()) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameIconHost(host, trusted string) bool {
+	if trusted == "" {
+		return false
+	}
+	if strings.EqualFold(host, trusted) {
+		return true
+	}
+	a, b := net.ParseIP(host), net.ParseIP(trusted)
+	return a != nil && b != nil && a.Equal(b)
+}
+
+func checkIconTarget(ctx context.Context, target *url.URL, trustedHost string) error {
+	if (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil {
+		return fmt.Errorf("icon URL must be an http(s) URL without credentials")
+	}
+	host := target.Hostname()
+	if sameIconHost(host, trustedHost) {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !isPublicIP(ip) {
+			return fmt.Errorf("icon URL host %q is not a public address", host)
+		}
+		return nil
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return err
+	}
+	for _, ip := range ips {
+		if !isPublicIP(ip) {
+			return fmt.Errorf("icon URL host %q resolves to a non-public address", host)
+		}
+	}
+	return nil
+}
+
+func (api *Session) iconHTTP(trustedHost string) *http.Client {
+	base := api.HTTP
+	if base == nil {
+		base = http.DefaultClient
+	}
+	client := *base
+	var transport *http.Transport
+	switch current := base.Transport.(type) {
+	case nil:
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	case *http.Transport:
+		transport = current.Clone()
+	default:
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	}
+	if transport != nil {
+		// Direct dialing keeps destination checks effective even when a
+		// proxy or custom TLS dialer is configured on the shared client.
+		transport.Proxy = nil
+		transport.DialTLSContext = nil
+		transport.DialTLS = nil
+		dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+		dial := dialer.DialContext
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil {
+				return nil, err
+			}
+			if sameIconHost(host, trustedHost) {
+				return dial(ctx, network, address)
+			}
+			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, err
+			}
+			var lastErr error = fmt.Errorf("icon host %q has no addresses", host)
+			for _, ip := range ips {
+				if !isPublicIP(ip) {
+					return nil, fmt.Errorf("icon host %q resolves to a non-public address", host)
+				}
+				conn, err := dial(ctx, network, net.JoinHostPort(ip.String(), port))
+				if err == nil {
+					return conn, nil
+				}
+				lastErr = err
+			}
+			return nil, lastErr
+		}
+		client.Transport = transport
+	}
+	previous := base.CheckRedirect
+	client.CheckRedirect = func(request *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("icon fetch stopped after 10 redirects")
+		}
+		if previous != nil {
+			if err := previous(request, via); err != nil {
+				return err
+			}
+		}
+		return checkIconTarget(request.Context(), request.URL, trustedHost)
+	}
+	return &client
+}
+
+func (api *Session) fetchIconBytes(ctx context.Context, endpoint string, limit int64, trustedHost string) ([]byte, *url.URL, error) {
+	target, err := url.Parse(endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkIconTarget(ctx, target, trustedHost); err != nil {
+		return nil, nil, err
+	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	response, err := api.HTTP.Do(request)
+	client := api.iconHTTP(trustedHost)
+	defer client.CloseIdleConnections()
+	response, err := client.Do(request)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -55,7 +189,11 @@ func (api *Session) fetchIconBytes(ctx context.Context, endpoint string, limit i
 
 // FetchIcon converts supported raster formats to a bounded PNG suitable for list avatars.
 func (api *Session) FetchIcon(ctx context.Context, endpoint string) ([]byte, error) {
-	data, _, err := api.fetchIconBytes(ctx, endpoint, maxIconDownload)
+	return api.fetchIcon(ctx, endpoint, "")
+}
+
+func (api *Session) fetchIcon(ctx context.Context, endpoint, trustedHost string) ([]byte, error) {
+	data, _, err := api.fetchIconBytes(ctx, endpoint, maxIconDownload, trustedHost)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +330,12 @@ func renderIcon(data []byte) (normalized []byte, err error) {
 // Favicon tries declared icons before the conventional /favicon.ico location.
 func (api *Session) Favicon(ctx context.Context, pds string) ([]byte, error) {
 	candidates := []string{}
-	page, base, err := api.fetchIconBytes(ctx, pds, 1<<20)
+	source, _ := url.Parse(pds)
+	trustedHost := ""
+	if source != nil {
+		trustedHost = source.Hostname()
+	}
+	page, base, err := api.fetchIconBytes(ctx, pds, 1<<20, trustedHost)
 	if err == nil {
 		tokenizer := html.NewTokenizer(bytes.NewReader(page))
 		for len(candidates) < 16 {
@@ -237,7 +380,7 @@ func (api *Session) Favicon(ctx context.Context, pds string) ([]byte, error) {
 	}
 	candidates = append(candidates, strings.TrimRight(pds, "/")+"/favicon.ico")
 	for _, endpoint := range candidates {
-		data, fetchErr := api.FetchIcon(ctx, endpoint)
+		data, fetchErr := api.fetchIcon(ctx, endpoint, trustedHost)
 		if fetchErr == nil {
 			return data, nil
 		}

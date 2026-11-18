@@ -2,7 +2,7 @@
 
 Maintain a Bluesky moderation list named `Users on <pds hostname>` for each watched PDS. Lists exclude the owner and accounts the owner follows.
 
-Capensis sets each list's icon from the PDS's favicon at startup and every `--rescan-interval`. If no supported icon loads, it keeps the current icon.
+Capensis sets each list's icon from the PDS's favicon at startup and every `--rescan-interval`. If no supported icon loads, it keeps the current icon. Icon links and redirects must resolve to public addresses, except for the configured PDS host. Icon requests bypass HTTP proxies.
 
 ## Run
 

@@ -2,7 +2,7 @@
 
 Maintain a Bluesky moderation list named `Followers of <current handle>` for each target account. Lists exclude the owner and accounts the owner follows.
 
-Helix uses the target account's profile picture as the list icon. Icons refresh at startup and every `--rescan-interval`. Missing or unsupported images leave the existing icon unchanged.
+Helix uses the target account's profile picture as the list icon. Icons refresh at startup and every `--rescan-interval`. Missing or unsupported images leave the existing icon unchanged. Profile-picture URLs and redirects must resolve to public addresses. Icon requests bypass HTTP proxies.
 
 ## Run
 
