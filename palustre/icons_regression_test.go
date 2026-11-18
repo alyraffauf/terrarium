@@ -31,6 +31,7 @@ func icoTestPNG(t *testing.T, w, h int, seed int64) []byte {
 type icoTestEntry struct {
 	payload []byte
 	w, h    int
+	bits    int
 	// offset >= 0 forces the entry to share payload bytes already in the
 	// file (overlapping entries), instead of appending its own copy.
 	offset int
@@ -45,6 +46,7 @@ func buildTestICO(entries []icoTestEntry) []byte {
 	for i, entry := range entries {
 		dir := data[6+i*16 : 6+(i+1)*16]
 		dir[0], dir[1] = byte(entry.w%256), byte(entry.h%256)
+		dir[6] = byte(entry.bits)
 		at, size := entry.offset, entry.size
 		if at < 0 {
 			at, size = offset, len(entry.payload)
@@ -101,7 +103,9 @@ func TestNormalizeIconFallsBackToValidICOEntry(t *testing.T) {
 func TestNormalizeIconFallsBackWhenICOEntryPanicsCodec(t *testing.T) {
 	small := icoTestPNG(t, 16, 16, 31)
 	panicking := []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
-	ico := buildTestICO([]icoTestEntry{icoEntry(small, 16, 16), icoEntry(panicking, 64, 64)})
+	bad := icoEntry(panicking, 64, 64)
+	bad.bits = 32 // a 32bpp entry reaches the codec code that reads past a short payload
+	ico := buildTestICO([]icoTestEntry{icoEntry(small, 16, 16), bad})
 	out, err := normalizeIcon(ico)
 	if err != nil {
 		t.Fatalf("panicking largest entry discarded a usable icon: %v", err)
@@ -111,7 +115,7 @@ func TestNormalizeIconFallsBackWhenICOEntryPanicsCodec(t *testing.T) {
 		t.Fatalf("fallback produced %dx%d, err %v; want 16x16", cfg.Width, cfg.Height, err)
 	}
 	// A panicking entry on its own is still an error, never a crash.
-	ico = buildTestICO([]icoTestEntry{icoEntry(panicking, 64, 64)})
+	ico = buildTestICO([]icoTestEntry{bad})
 	if _, err := normalizeIcon(ico); err == nil {
 		t.Fatal("panicking sole entry accepted")
 	}
