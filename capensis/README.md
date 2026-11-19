@@ -42,6 +42,8 @@ To back up the database, stop Capensis before copying it or use SQLite's online 
 
 Successful writes log `list item added` or `list item removed` with a timestamp, account DID, target, list URI, and record key. Removal `reason` distinguishes `not_eligible` from `duplicate` cleanup. Keep these logs to retain membership history.
 
+By default, Capensis waits at least 10 seconds between writes across all its lists. Set `--write-interval`, `CAPENSIS_WRITE_INTERVAL`, or the Helm value `writeInterval` to tune this. Each process has its own timer. Running one Helix and one Capensis for the same owner allows up to about 12 writes per minute combined at the defaults.
+
 ## Metrics
 
 Set `--metrics-address=:9090` to serve Prometheus metrics at `/metrics`. The listener is disabled by default and has no authentication. Bind to `127.0.0.1:9090` for local-only access.

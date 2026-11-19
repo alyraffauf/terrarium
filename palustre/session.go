@@ -135,7 +135,14 @@ func (api *Session) ObserveWriteError(err error) {
 }
 
 func (api *Session) WaitWrite(ctx context.Context) error {
-	if !Pause(ctx, max(0, time.Second-time.Since(api.LastWrite))) {
+	interval := api.Config.WriteInterval
+	if interval == 0 {
+		interval = DefaultWriteInterval
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !Pause(ctx, max(0, interval-time.Since(api.LastWrite))) {
 		return ctx.Err()
 	}
 	api.LastWrite = time.Now()
@@ -146,4 +153,9 @@ func XRPCCode(err error, code string) bool {
 	return errors.As(err, &failure) && failure.ErrStr == code
 }
 
-type Config struct{ Identifier, Password, LoginPDS, Slingshot string }
+const DefaultWriteInterval = 10 * time.Second
+
+type Config struct {
+	Identifier, Password, LoginPDS, Slingshot string
+	WriteInterval                             time.Duration
+}

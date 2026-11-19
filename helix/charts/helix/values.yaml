@@ -12,6 +12,7 @@ appview: https://public.api.bsky.app
 slingshot: https://slingshot.aly.town
 jetstream: https://jetstream.waow.tech
 loginPDS: ""
+writeInterval: 10s
 rescanInterval: 6h
 persistence:
   existingClaim: ""

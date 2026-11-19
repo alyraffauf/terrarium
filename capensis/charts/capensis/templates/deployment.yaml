@@ -55,6 +55,7 @@ spec:
             - {{ printf "--identifier=%v" (required "identifier is required" .Values.identifier) | quote }}
             - {{ printf "--slingshot=%v" .Values.slingshot | quote }}
             - {{ printf "--jetstream=%v" .Values.jetstream | quote }}
+            - {{ printf "--write-interval=%v" .Values.writeInterval | quote }}
             - {{ printf "--rescan-interval=%v" .Values.rescanInterval | quote }}
             {{- if .Values.loginPDS }}
             - {{ printf "--login-pds=%v" .Values.loginPDS | quote }}

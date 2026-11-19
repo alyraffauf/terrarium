@@ -15,6 +15,7 @@ type Config struct {
 	MetricsAddress                                                      string
 	PDS, Identifier, Password, LoginPDS, Slingshot, Jetstream, Database string
 	Targets                                                             []Target
+	WriteInterval                                                       time.Duration
 	RescanInterval                                                      time.Duration
 }
 
@@ -112,6 +113,9 @@ func (cfg *Config) validate() error {
 	cfg.Jetstream, err = palustre.NormalizeJetstream(cfg.Jetstream)
 	if err != nil {
 		return err
+	}
+	if cfg.WriteInterval < 0 {
+		return fmt.Errorf("write-interval cannot be negative")
 	}
 	if cfg.RescanInterval <= 0 {
 		return fmt.Errorf("rescan-interval must be positive")

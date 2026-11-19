@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/alyraffauf/terrarium/capensis"
+	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -47,7 +48,8 @@ func command() *cobra.Command {
 				return err
 			}
 			cfg := capensis.Config{
-				Targets: targets, Identifier: config.GetString("identifier"),
+				WriteInterval: config.GetDuration("write-interval"),
+				Targets:       targets, Identifier: config.GetString("identifier"),
 				Password: config.GetString("app-password"), LoginPDS: config.GetString("login-pds"),
 				Slingshot: config.GetString("slingshot"), Jetstream: config.GetString("jetstream"),
 				MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: config.GetDuration("rescan-interval"),
@@ -65,6 +67,7 @@ func command() *cobra.Command {
 	flags.String("slingshot", "https://slingshot.aly.town", "Slingshot base URL")
 	flags.String("jetstream", "wss://jetstream.waow.tech", "Jetstream v2 base URL or subscribeEvents URL")
 	flags.String("database", "capensis.sqlite", "SQLite state file")
+	flags.Duration("write-interval", palustre.DefaultWriteInterval, "Minimum interval between writes across all lists in this process (0 uses the default)")
 	flags.Duration("rescan-interval", 6*time.Hour, "Interval between full PDS rescans")
 	if err := config.BindPFlags(flags); err != nil {
 		panic(err)
