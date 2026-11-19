@@ -4,7 +4,7 @@
   perSystem = { pkgs, self', ... }: {
     packages.default = self'.packages.capensis;
     devShells.default = pkgs.mkShell {
-      packages = [ pkgs.go pkgs.sqlc ];
+      packages = [ pkgs.go pkgs.sqlc pkgs.kubernetes-helm ];
       CGO_ENABLED = "0";
     };
   };

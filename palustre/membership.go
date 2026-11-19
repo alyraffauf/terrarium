@@ -25,6 +25,14 @@ func RecordKey(value string) string {
 }
 
 func (api *Session) EnsureList(ctx context.Context, listURI, name string, previousNames ...string) error {
+	return api.ensureList(ctx, listURI, name, nil, previousNames)
+}
+
+func (api *Session) EnsurePostList(ctx context.Context, listURI, name, post string) error {
+	return api.ensureList(ctx, listURI, name, &post, nil)
+}
+
+func (api *Session) ensureList(ctx context.Context, listURI, name string, description *string, previousNames []string) error {
 	uri, err := syntax.ParseATURI(listURI)
 	if err != nil {
 		return err
@@ -40,8 +48,12 @@ func (api *Session) EnsureList(ctx context.Context, listURI, name string, previo
 			return fmt.Errorf("unexpected record at managed list URI")
 		}
 		if list.Purpose != nil && *list.Purpose == "app.bsky.graph.defs#modlist" {
-			if list.Name == name {
+			sameDescription := description == nil || (list.Description != nil && *list.Description == *description)
+			if list.Name == name && sameDescription {
 				return nil
+			}
+			if description != nil && sameDescription {
+				previousNames = append(previousNames, list.Name)
 			}
 			for _, previous := range previousNames {
 				if list.Name != previous {
@@ -65,7 +77,7 @@ func (api *Session) EnsureList(ctx context.Context, listURI, name string, previo
 		return err
 	}
 	purpose := "app.bsky.graph.defs#modlist"
-	list := &listlex.GraphList{LexiconTypeID: ListCollection, Name: name, Purpose: &purpose, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	list := &listlex.GraphList{LexiconTypeID: ListCollection, Name: name, Description: description, Purpose: &purpose, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
 	return api.Put(ctx, ListCollection, key, &lexutil.LexiconTypeDecoder{Val: list})
 }
 

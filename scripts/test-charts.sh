@@ -1,5 +1,5 @@
 #!/bin/sh
-# Executable Helm contract checks for both charts. Requires `helm` (or set
+# Executable Helm contract checks for the charts. Requires `helm` (or set
 # HELM="nix run nixpkgs#kubernetes-helm --"). Every rendered arg that the
 # binary parses must be well-formed for string and numeric value spellings.
 set -eu
@@ -19,6 +19,10 @@ check_no_garbled_format capensis --set identifier=you.example.com --set existing
 check_no_garbled_format capensis --set identifier=you.example.com --set existingSecret=x --set 'pds[0]=a.example' --set rescanInterval=6h
 check_no_garbled_format helix --set identifier=you.example.com --set existingSecret=x --set 'accounts[0]=a.example' --set rescanInterval=6
 check_no_garbled_format helix --set identifier=you.example.com --set existingSecret=x --set 'accounts[0]=a.example' --set metrics.enabled=true --set metrics.port=8080
+check_no_garbled_format cordata --set identifier=you.example.com --set existingSecret=x --set post=at://did:example:alice/app.bsky.feed.post/demo
+if $HELM template rel ./cordata/charts/cordata --set identifier=you.example.com --set existingSecret=x >/dev/null 2>&1; then
+  echo "FAIL cordata rendered without post"; fail=1
+fi
 # Metrics wiring must agree on the port across Service, container, annotation.
 rendered="$($HELM template rel ./helix/charts/helix --set identifier=you.example.com --set existingSecret=x --set 'accounts[0]=a.example' --set metrics.enabled=true --set metrics.port=8080)"
 for want in 'containerPort: 8080' '--metrics-address=:8080' 'port: 8080' 'prometheus.io/port: "8080"'; do
