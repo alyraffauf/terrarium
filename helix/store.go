@@ -166,12 +166,17 @@ func (db *store) retry(ctx context.Context, work job) error {
 	delay := min(time.Hour, time.Second*time.Duration(1<<min(work.Attempts+1, 12)))
 	return db.queries.RetryJob(ctx, storage.RetryJobParams{Did: work.DID, Generation: work.Generation, Ready: time.Now().Add(delay).Unix()})
 }
-func (db *store) queueScan(ctx context.Context, did string) error {
+func (db *store) queueScan(ctx context.Context, dids ...string) error {
 	return db.transaction(ctx, func(queries *storage.Queries) error {
-		if err := queries.RememberCandidate(ctx, did); err != nil {
-			return err
+		for _, did := range dids {
+			if err := queries.RememberCandidate(ctx, did); err != nil {
+				return err
+			}
+			if err := queries.QueueScan(ctx, did); err != nil {
+				return err
+			}
 		}
-		return queries.QueueScan(ctx, did)
+		return nil
 	})
 }
 func (db *store) queueMembers(ctx context.Context, actor string) error {

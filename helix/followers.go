@@ -30,13 +30,15 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 		if err != nil {
 			return err
 		}
+		dids := make([]string, 0, len(page.Followers))
 		for _, follower := range page.Followers {
 			if _, err := syntax.ParseDID(follower.Did); err != nil {
 				return err
 			}
-			if err := db.queueScan(ctx, follower.Did); err != nil {
-				return err
-			}
+			dids = append(dids, follower.Did)
+		}
+		if err := db.queueScan(ctx, dids...); err != nil {
+			return err
 		}
 		if page.Cursor == nil || *page.Cursor == "" {
 			return nil

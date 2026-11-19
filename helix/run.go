@@ -50,11 +50,13 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	if err != nil {
 		return err
 	}
+	inventory := &inventoryScan{checks: make(map[string]time.Time)}
 	for _, target := range targets {
 		if err := target.ensureList(ctx); err != nil {
 			return err
 		}
 		target.refreshListIcon(ctx)
+		inventory.checks[target.listURI] = time.Now().Add(target.rescanInterval)
 		slog.Info("maintaining list", "account", target.actor, "uri", target.listURI, "name", target.name)
 	}
 	if err := db.initializeCursor(ctx); err != nil {
@@ -90,7 +92,6 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		}
 	}()
 	// Authenticated operations have one owner, keeping token refresh serialized.
-	inventory := &inventoryScan{}
 	nextFollows := time.Time{}
 	for ctx.Err() == nil {
 		requested, err := db.takeRescan(ctx)
@@ -307,17 +308,31 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 }
 
 func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.Time, now time.Time) {
+	var scans sync.WaitGroup
+	slots := make(chan struct{}, 4)
 	for i, api := range targets {
 		if now.Before(next[i]) {
 			continue
 		}
-		delay := api.rescanInterval
-		if err := api.backfill(ctx, db); err != nil {
-			slog.Error("Follower backfill failed", "account", api.actor, "error", err)
-			delay = time.Minute
-		} else {
-			slog.Info("Follower backfill queued", "account", api.actor)
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			scans.Wait()
+			return
 		}
-		next[i] = time.Now().Add(delay)
+		scans.Add(1)
+		go func() {
+			defer scans.Done()
+			defer func() { <-slots }()
+			delay := api.rescanInterval
+			if err := api.backfill(ctx, db); err != nil {
+				slog.Error("Follower backfill failed", "account", api.actor, "error", err)
+				delay = time.Minute
+			} else {
+				slog.Info("Follower backfill queued", "account", api.actor)
+			}
+			next[i] = time.Now().Add(delay)
+		}()
 	}
+	scans.Wait()
 }
