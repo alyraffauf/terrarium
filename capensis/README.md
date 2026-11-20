@@ -1,6 +1,6 @@
 # Capensis
 
-Maintain a Bluesky moderation list named `Users on <pds hostname>` for each watched PDS. Lists exclude the owner and accounts the owner follows.
+Maintain a Bluesky moderation list described as `Users on <pds hostname>` for each watched PDS. Lists exclude the owner and accounts the owner follows.
 
 Capensis sets each list's icon from the PDS's favicon at startup and every `--rescan-interval`. If no supported icon loads, it keeps the current icon. Icon links and redirects must resolve to public addresses, except for the configured PDS host. Icon requests bypass HTTP proxies.
 
@@ -32,7 +32,7 @@ nix run .#capensis -- first.example.com \
 	--list 'first.example.com=at://did:plc:YOUR_DID/app.bsky.graph.list/LIST_KEY'
 ```
 
-The list must belong to the owner, be named `Users on <pds hostname>`, and have moderation purpose. Capensis manages all membership in that list. Capensis exits if a saved binding points to a different list. Deleted lists are recreated at the same URI. Removing a PDS from the configuration stops its updates without deleting its list.
+The list must belong to the owner, have the managed title and description or the legacy name `Users on <pds hostname>`, and have moderation purpose. Capensis manages all membership in that list. Capensis exits if a saved binding points to a different list. Deleted lists are recreated at the same URI. Removing a PDS from the configuration stops its updates without deleting its list.
 
 Capensis backfills accounts from each PDS at startup and every `--rescan-interval`, which defaults to six hours. Jetstream events trigger checks for account creation, migration, and deletion. Accounts confirmed inactive by their PDS leave the list. Owner follow and unfollow events refresh exclusions, with a five-minute fallback. Failed exclusion fetches pause membership changes until a complete snapshot succeeds.
 

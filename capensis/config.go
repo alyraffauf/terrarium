@@ -94,11 +94,7 @@ func (cfg *Config) validate() error {
 				return fmt.Errorf("list must be an at://DID/app.bsky.graph.list/record-key URI")
 			}
 		}
-		targetCfg := *cfg
-		targetCfg.PDS = target.PDS
-		if len(targetCfg.listName()) > 64 {
-			return fmt.Errorf("list name %q exceeds the lexicon's 64-byte limit", targetCfg.listName())
-		}
+
 	}
 	cfg.Slingshot, err = normalizePDS(cfg.Slingshot)
 	if err != nil {
@@ -124,10 +120,6 @@ func (cfg *Config) validate() error {
 		return fmt.Errorf("database must be a file path")
 	}
 	return nil
-}
-
-func (cfg Config) listName() string {
-	return listName(cfg.PDS)
 }
 
 func listName(pds string) string {

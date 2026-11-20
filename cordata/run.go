@@ -44,34 +44,6 @@ func postURI(ctx context.Context, client *xrpc.Client, raw string) (string, erro
 	return "at://" + actor + "/" + collection + "/" + uri.RecordKey().String(), nil
 }
 
-// List names have a 64-byte limit. Both forms identify the same post.
-func postTitle(ctx context.Context, client *xrpc.Client, post string) (string, error) {
-	if len(post) <= 64 {
-		return post, nil
-	}
-	uri, err := syntax.ParseATURI(post)
-	if err != nil {
-		return "", err
-	}
-	var profile struct {
-		Did    string
-		Handle string
-	}
-	actor := uri.Authority().String()
-	if err := client.LexDo(ctx, lexutil.Query, "", "app.bsky.actor.getProfile", map[string]any{"actor": actor}, nil, &profile); err != nil {
-		return "", err
-	}
-	handle, err := syntax.ParseHandle(profile.Handle)
-	if err != nil || profile.Did != actor || handle.String() == "handle.invalid" {
-		return "", fmt.Errorf("cannot resolve a valid title handle for %s", actor)
-	}
-	title := "at://" + handle.String() + "/" + uri.Collection().String() + "/" + uri.RecordKey().String()
-	if len(title) > 64 {
-		return "", fmt.Errorf("both AT URIs for the post exceed the 64-byte list title limit")
-	}
-	return title, nil
-}
-
 // The owner's repo is the durable membership store. Rebuild this index each scan.
 type inventory map[string][]string
 
@@ -192,14 +164,10 @@ func Run(ctx context.Context, cfg palustre.Config, appView, raw string, interval
 	}
 	key := palustre.RecordKey("cordata\n" + post)
 	list := "at://" + api.Client.Auth.Did + "/" + palustre.ListCollection + "/" + key
-	name, err := postTitle(ctx, view, post)
-	if err != nil {
-		return err
-	}
 	for ctx.Err() == nil {
 		err := api.Refresh(ctx)
 		if err == nil {
-			err = api.EnsurePostList(ctx, list, name, post)
+			err = api.EnsurePostList(ctx, list, post)
 		}
 		if err == nil {
 			slog.Info("maintaining list", "post", post, "list", list)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/bluesky-social/indigo/xrpc"
 )
 
@@ -78,16 +79,17 @@ func TestListBindingsSurviveMigrationAndRestart(t *testing.T) {
 
 func TestExplicitListUsesItsRecordKey(t *testing.T) {
 	const key = "existing-list"
+	const uri = "at://" + ownerDID + "/" + listCollection + "/" + key
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if r.URL.Path != "/xrpc/com.atproto.repo.getRecord" || r.URL.Query().Get("rkey") != key {
 			t.Errorf("unexpected request %s", r.URL)
 		}
-		fmt.Fprintf(w, `{"value":{"$type":"app.bsky.graph.list","name":"Users on pds.example","purpose":"app.bsky.graph.defs#modlist","createdAt":"2026-11-16T00:00:00Z"}}`)
+		fmt.Fprintf(w, `{"value":{"$type":"app.bsky.graph.list","name":%q,"description":"Users on pds.example","purpose":"app.bsky.graph.defs#modlist","createdAt":"2026-11-16T00:00:00Z"}}`, palustre.ListTitle(uri))
 	}))
 	defer server.Close()
-	api := &listTarget{session: newSession(Config{}, nil, &xrpc.Client{Host: server.URL, Client: server.Client(), Auth: &xrpc.AuthInfo{Did: ownerDID}}), pds: "https://pds.example", listURI: "at://" + ownerDID + "/" + listCollection + "/" + key}
+	api := &listTarget{session: newSession(Config{}, nil, &xrpc.Client{Host: server.URL, Client: server.Client(), Auth: &xrpc.AuthInfo{Did: ownerDID}}), pds: "https://pds.example", listURI: uri}
 	if err := api.ensureList(context.Background()); err != nil {
 		t.Fatal(err)
 	}

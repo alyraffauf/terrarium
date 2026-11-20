@@ -1,6 +1,6 @@
 # Helix
 
-Maintain a Bluesky moderation list named `Followers of <current handle>` for each target account. Lists exclude the owner and accounts the owner follows.
+Maintain a Bluesky moderation list described as `Followers of <current handle>` for each target account. Lists exclude the owner and accounts the owner follows.
 
 Helix uses the target account's profile picture as the list icon. Icons refresh at startup and every `--rescan-interval`. Missing or unsupported images leave the existing icon unchanged. Profile-picture URLs and redirects must resolve to public addresses. Icon requests bypass HTTP proxies.
 
@@ -25,7 +25,7 @@ The defaults use `https://slingshot.aly.town`, `wss://jetstream.waow.tech`, and 
 
 Keep `helix.sqlite` on persistent storage, or choose a path with `--database`. The database stores target-DID-to-list bindings, pending work, and the stream cursor. Each database belongs to one list owner. Use separate databases for different owners and for Capensis. Run one process per database. Back up the database before upgrades.
 
-Each list stays bound to a target DID. Helix resolves configured handles at startup. Use DIDs to keep tracking the same account if a handle is reassigned before a restart. List names follow the current handle at startup and every `--rescan-interval`. Long handles are truncated to fit the name limit.
+Each list stays bound to a target DID. Helix resolves configured handles at startup. Use DIDs to keep tracking the same account if a handle is reassigned before a restart. The description follows handle changes at startup and every `--rescan-interval`.
 
 To bind an account to a specific list on its first run:
 
@@ -34,7 +34,7 @@ nix run .#helix -- first.example.com \
 	--list 'first.example.com=at://did:plc:YOUR_DID/app.bsky.graph.list/LIST_KEY'
 ```
 
-An existing list must belong to the owner, be named `Followers of <current handle>`, and have moderation purpose. Helix manages all membership in that list. Conflicting saved bindings fail. Deleted lists are recreated at the same URI. Removing a target from configuration stops its updates without deleting the list or its saved binding.
+An existing list must belong to the owner, have the managed title and description or the legacy name `Followers of <current handle>`, and have moderation purpose. Helix manages all membership in that list. Conflicting saved bindings fail. Deleted lists are recreated at the same URI. Removing a target from configuration stops its updates without deleting the list or its saved binding.
 
 Helix backfills followers from the AppView at startup and every `--rescan-interval`, which defaults to six hours. Jetstream follow and unfollow events trigger checks against candidates' current PDSes. Account events recheck known candidates. Accounts confirmed inactive leave the lists.
 

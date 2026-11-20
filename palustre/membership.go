@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -24,61 +26,100 @@ func RecordKey(value string) string {
 	return syntax.NewTIDFromInteger(binary.BigEndian.Uint64(digest[:8]) & ((1 << 63) - 1)).String()
 }
 
-func (api *Session) EnsureList(ctx context.Context, listURI, name string, previousNames ...string) error {
-	return api.ensureList(ctx, listURI, name, nil, previousNames)
+// ListTitle derives a stable neutral name from the permanent list URI.
+func ListTitle(listURI string) string {
+	adjectives := [...]string{
+		"Amber", "Bright", "Clear", "Dewy", "Golden", "Green", "Mellow", "Misty",
+		"Dusky", "Quiet", "Silver", "Soft", "Still", "Sunny", "Warm", "Snowy",
+		"Azure", "Breezy", "Calm", "Cloudy", "Cool", "Copper", "Crisp", "Dappled",
+		"Pale", "Fresh", "Frosty", "Gentle", "Lunar", "Rosy", "Shady", "Wavy",
+	}
+	nouns := [...]string{
+		"Birch", "Brook", "Birchwood", "Clover", "Fern", "Garden", "Grove", "Lake",
+		"Maple", "Meadow", "Moss", "Pebble", "Pond", "Reed", "Spruce", "Willow",
+		"Aspen", "Bay", "Cedar", "Bloom", "Cypress", "Dune", "Elm", "Field",
+		"Glade", "Hill", "Lagoon", "Laurel", "Linden", "Oak", "Pine", "River",
+	}
+	hash := sha256.Sum256([]byte(listURI))
+	return adjectives[int(hash[0])%len(adjectives)] + " " + nouns[int(hash[1])%len(nouns)]
 }
 
-func (api *Session) EnsurePostList(ctx context.Context, listURI, name, post string) error {
-	return api.ensureList(ctx, listURI, name, &post, nil)
+func (api *Session) EnsureList(ctx context.Context, listURI, description string, previousNames ...string) error {
+	return api.ensureList(ctx, listURI, description, false, previousNames)
 }
 
-func (api *Session) ensureList(ctx context.Context, listURI, name string, description *string, previousNames []string) error {
+func (api *Session) EnsurePostList(ctx context.Context, listURI, post string) error {
+	return api.ensureList(ctx, listURI, post, true, nil)
+}
+
+func (api *Session) ensureList(ctx context.Context, listURI, description string, post bool, previousNames []string) error {
 	uri, err := syntax.ParseATURI(listURI)
 	if err != nil {
 		return err
 	}
+	title := ListTitle(listURI)
 	key := uri.RecordKey().String()
-	existing, err := atproto.RepoGetRecord(ctx, api.Client, "", ListCollection, api.Client.Auth.Did, key)
-	if err == nil {
-		if existing.Value == nil {
-			return fmt.Errorf("managed list has no record value")
+	owner := api.Client.Auth.Did
+	existing, err := atproto.RepoGetRecord(ctx, api.Client, "", ListCollection, owner, key)
+	purpose := "app.bsky.graph.defs#modlist"
+	if XRPCCode(err, "RecordNotFound") {
+		if len(description) > 300 {
+			return fmt.Errorf("list description exceeds 300 graphemes")
 		}
-		list, ok := existing.Value.Val.(*listlex.GraphList)
-		if !ok {
-			return fmt.Errorf("unexpected record at managed list URI")
-		}
-		if list.Purpose != nil && *list.Purpose == "app.bsky.graph.defs#modlist" {
-			sameDescription := description == nil || (list.Description != nil && *list.Description == *description)
-			if list.Name == name && sameDescription {
-				return nil
-			}
-			if description != nil && sameDescription {
-				previousNames = append(previousNames, list.Name)
-			}
-			for _, previous := range previousNames {
-				if list.Name != previous {
-					continue
-				}
-				if existing.Cid == nil || *existing.Cid == "" {
-					return fmt.Errorf("managed list has no CID")
-				}
-				list.Name = name
-				if err := api.WaitWrite(ctx); err != nil {
-					return err
-				}
-				_, err := atproto.RepoPutRecord(ctx, api.Client, &atproto.RepoPutRecord_Input{Repo: api.Client.Auth.Did, Collection: ListCollection, Rkey: key, Record: &lexutil.LexiconTypeDecoder{Val: list}, SwapRecord: existing.Cid})
-				api.ObserveWriteError(err)
-				return err
-			}
-		}
-		return fmt.Errorf("refusing to adopt list %s: expected name %q and moderation purpose", listURI, name)
+		list := &listlex.GraphList{LexiconTypeID: ListCollection, Name: title, Description: &description, Purpose: &purpose, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+		return api.Put(ctx, ListCollection, key, &lexutil.LexiconTypeDecoder{Val: list})
 	}
-	if !XRPCCode(err, "RecordNotFound") {
+	if err != nil {
 		return err
 	}
-	purpose := "app.bsky.graph.defs#modlist"
-	list := &listlex.GraphList{LexiconTypeID: ListCollection, Name: name, Description: description, Purpose: &purpose, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano)}
-	return api.Put(ctx, ListCollection, key, &lexutil.LexiconTypeDecoder{Val: list})
+	if existing.Value == nil {
+		return fmt.Errorf("managed list has no record value")
+	}
+	list, ok := existing.Value.Val.(*listlex.GraphList)
+	if !ok || list.Purpose == nil || *list.Purpose != purpose {
+		return fmt.Errorf("expected moderation list at %s", listURI)
+	}
+	text := ""
+	if list.Description != nil {
+		text = *list.Description
+	}
+	lines := strings.Split(text, "\n")
+	last := lines[len(lines)-1]
+	legacy := list.Name == description || slices.Contains(previousNames, list.Name)
+	if post {
+		legacy = text == description
+	}
+	if list.Name == title && (last == description || (post && lines[0] == description)) {
+		return nil
+	}
+	if !legacy && !(list.Name == title && slices.Contains(previousNames, last) && last != "") {
+		return fmt.Errorf("refusing to adopt unrelated list %s", listURI)
+	}
+	// Keep existing prose and its facets at the same byte offsets.
+	if last == description {
+		if post && list.Name != title && list.Name != description {
+			lines = append(lines, list.Name)
+		}
+	} else if last == "" || slices.Contains(previousNames, last) {
+		lines[len(lines)-1] = description
+	} else {
+		lines = append(lines, description)
+	}
+	text = strings.Join(lines, "\n")
+	if len(text) > 3000 {
+		return fmt.Errorf("updated description for %s exceeds the list record limit", listURI)
+	}
+	if existing.Cid == nil || *existing.Cid == "" {
+		return fmt.Errorf("managed list has no CID")
+	}
+	list.Name = title
+	list.Description = &text
+	if err := api.WaitWrite(ctx); err != nil {
+		return err
+	}
+	_, err = atproto.RepoPutRecord(ctx, api.Client, &atproto.RepoPutRecord_Input{Repo: owner, Collection: ListCollection, Rkey: key, Record: &lexutil.LexiconTypeDecoder{Val: list}, SwapRecord: existing.Cid})
+	api.ObserveWriteError(err)
+	return err
 }
 
 type Membership struct {

@@ -9,6 +9,8 @@ AT Protocol list tools, named after plants.
 | [Helix](helix/) | Moderation lists of selected accounts' followers. *Hedera helix*. |
 | [Palustre](palustre/) | Shared AT Protocol operations. *Sphagnum palustre*. |
 
+Each managed list gets a stable title drawn from 1,024 combinations of neutral adjectives and nature nouns, such as `Quiet Meadow`. Its description identifies the target. On upgrade, the daemons rename existing managed lists in place.
+
 Capensis and Helix exclude the list owner and accounts the owner follows. Creating a list does not subscribe you to its blocking actions.
 
 ## Build and develop

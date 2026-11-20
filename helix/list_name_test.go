@@ -13,7 +13,7 @@ import (
 	"github.com/bluesky-social/indigo/xrpc"
 )
 
-func TestListNameFollowsHandleAcrossRestarts(t *testing.T) {
+func TestStableTitleAndDescriptionFollowHandleAcrossRestarts(t *testing.T) {
 	db := testStore(t)
 	var mutex sync.Mutex
 	handle := "old.example.com"
@@ -59,7 +59,7 @@ func TestListNameFollowsHandleAcrossRestarts(t *testing.T) {
 		if err := api.ensureList(context.Background()); err != nil {
 			t.Fatal(err)
 		}
-		if api.name != "Followers of "+next {
+		if api.name == "" || list.Name != api.name || list.Description == nil || *list.Description != description+"\nFollowers of "+next {
 			t.Fatalf("incorrect list name %q", api.name)
 		}
 	}
@@ -68,7 +68,7 @@ func TestListNameFollowsHandleAcrossRestarts(t *testing.T) {
 	if writes != 2 {
 		t.Fatalf("got %d renames, want 2", writes)
 	}
-	if list.Description == nil || *list.Description != description || list.CreatedAt != "2026-01-01T00:00:00Z" {
+	if list.Description == nil || list.CreatedAt != "2026-01-01T00:00:00Z" {
 		t.Fatal("rename changed unrelated metadata")
 	}
 }

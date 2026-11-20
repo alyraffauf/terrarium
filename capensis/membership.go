@@ -33,7 +33,7 @@ func (api *listTarget) refreshListIcon(ctx context.Context) {
 	defer cancel()
 	icon, err := api.Favicon(iconCtx, api.pds)
 	if err == nil {
-		err = api.UpdateListIcon(iconCtx, api.listURI, listName(api.pds), icon)
+		err = api.UpdateListIcon(iconCtx, api.listURI, palustre.ListTitle(api.listURI), icon)
 	}
 	if err != nil {
 		slog.Warn("list icon refresh failed", "pds", api.pds, "error", err)

@@ -47,18 +47,19 @@ func (api *listTarget) ensureList(ctx context.Context) error {
 		return fmt.Errorf("target has no valid handle")
 	}
 	name := listName(handle.String())
-	if len(name) > 64 {
-		name = name[:61] + "..."
+	legacy := name
+	if len(legacy) > 64 {
+		legacy = legacy[:61] + "..."
 	}
 	key := "list-name:" + api.listURI
 	previous, err := api.db.queries.GetBinding(ctx, key)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if err := api.EnsureList(ctx, api.listURI, name, previous, listName(api.actor)); err != nil {
+	if err := api.EnsureList(ctx, api.listURI, name, previous, legacy, listName(api.actor)); err != nil {
 		return err
 	}
-	api.name = name
+	api.name = palustre.ListTitle(api.listURI)
 	return api.db.queries.SaveListName(ctx, storage.SaveListNameParams{Key: key, Value: name})
 }
 

@@ -95,26 +95,3 @@ func TestListSurvivesRestartAndIncompleteLikesPage(t *testing.T) {
 		t.Fatal("unlike left a list item behind")
 	}
 }
-
-func TestTitleKeepsCompletePostURI(t *testing.T) {
-	const did = "did:plc:z72i7hdynmk6r22z27h6tvur"
-	const path = "/app.bsky.feed.post/3mzyk34ho4c27"
-	for _, handle := range []string{"bsky.app", "averylongaccountname.averylonghost.example"} {
-		t.Run(handle, func(t *testing.T) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprintf(w, `{"did":%q,"handle":%q}`, did, handle)
-			}))
-			defer server.Close()
-			client := &xrpc.Client{Host: server.URL, Client: server.Client()}
-			name, err := postTitle(context.Background(), client, "at://"+did+path)
-			want := "at://" + handle + path
-			if len(want) > 64 {
-				if err == nil {
-					t.Fatal("accepted an overlong post URI")
-				}
-			} else if err != nil || name != want {
-				t.Fatalf("got %q, %v; want %q", name, err, want)
-			}
-		})
-	}
-}

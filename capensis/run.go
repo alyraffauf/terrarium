@@ -15,6 +15,7 @@ import (
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/gofrs/flock"
 
+	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/alyraffauf/terrarium/palustre/listlex"
 )
 
@@ -57,7 +58,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			return err
 		}
 		target.refreshListIcon(ctx)
-		slog.Info("maintaining list", "pds", target.pds, "uri", target.listURI, "name", listName(target.pds))
+		slog.Info("maintaining list", "pds", target.pds, "uri", target.listURI, "name", palustre.ListTitle(target.listURI))
 	}
 	if err := db.initializeCursor(ctx); err != nil {
 		return err
