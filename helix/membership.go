@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -20,6 +21,7 @@ const listCollection = palustre.ListCollection
 const itemCollection = palustre.ItemCollection
 
 type listTarget struct {
+	suspended atomic.Bool
 	*session
 	actor          string
 	rescanInterval time.Duration
@@ -37,6 +39,12 @@ func (api *listTarget) ensureList(ctx context.Context) error {
 	}
 	client := &xrpc.Client{Host: api.cfg.AppView, Client: api.HTTP}
 	if err := client.LexDo(ctx, lexutil.Query, "", "app.bsky.actor.getProfile", map[string]any{"actor": api.actor}, nil, &profile); err != nil {
+		if palustre.XRPCCode(err, "AccountTakedown") || palustre.XRPCCode(err, "AccountDeactivated") {
+			if !api.suspended.Swap(true) {
+				slog.Warn("target unavailable; pausing list updates", "account", api.actor, "error", err)
+			}
+			return nil
+		}
 		return err
 	}
 	if profile.DID != api.actor {
@@ -60,7 +68,11 @@ func (api *listTarget) ensureList(ctx context.Context) error {
 		return err
 	}
 	api.name = palustre.ListTitle(api.listURI)
-	return api.db.queries.SaveListName(ctx, storage.SaveListNameParams{Key: key, Value: name})
+	if err := api.db.queries.SaveListName(ctx, storage.SaveListNameParams{Key: key, Value: name}); err != nil {
+		return err
+	}
+	api.suspended.Store(false)
+	return nil
 }
 
 func (api *listTarget) refreshListIcon(ctx context.Context) {
@@ -97,6 +109,9 @@ func (api *listTarget) reconcile(ctx context.Context, work job, db *store) error
 	return api.reconcileSubject(ctx, subject, db)
 }
 func (api *listTarget) reconcileSubject(ctx context.Context, subject subjectState, db *store) error {
+	if api.suspended.Load() {
+		return nil
+	}
 	belongs := !subject.excluded && subject.follows[api.actor]
 
 	return api.Reconcile(ctx, db, palustre.Membership{Target: api.actor, ListURI: api.listURI, DID: subject.did, Include: belongs})

@@ -55,8 +55,11 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		if err := target.ensureList(ctx); err != nil {
 			return err
 		}
-		target.refreshListIcon(ctx)
 		inventory.checks[target.listURI] = time.Now().Add(target.rescanInterval)
+		if target.suspended.Load() {
+			continue
+		}
+		target.refreshListIcon(ctx)
 		slog.Info("maintaining list", "account", target.actor, "uri", target.listURI, "name", target.name)
 	}
 	if err := db.initializeCursor(ctx); err != nil {
@@ -242,7 +245,7 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 		if err := api.ensureList(ctx); err != nil {
 			slog.Error("list check failed", "account", api.actor, "error", err)
 			delay = time.Minute
-		} else {
+		} else if !api.suspended.Load() {
 			api.refreshListIcon(ctx)
 		}
 		scan.checks[api.listURI] = time.Now().Add(delay)
@@ -311,6 +314,10 @@ func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.
 	var scans sync.WaitGroup
 	slots := make(chan struct{}, 4)
 	for i, api := range targets {
+		if api.suspended.Load() {
+			next[i] = now.Add(time.Minute)
+			continue
+		}
 		if now.Before(next[i]) {
 			continue
 		}

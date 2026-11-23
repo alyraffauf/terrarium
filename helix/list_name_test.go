@@ -72,3 +72,26 @@ func TestStableTitleAndDescriptionFollowHandleAcrossRestarts(t *testing.T) {
 		t.Fatal("rename changed unrelated metadata")
 	}
 }
+
+func TestSuspendedTargetSkipsListAndMembershipWrites(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/xrpc/app.bsky.actor.getProfile" {
+			t.Errorf("unexpected request %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"error":"AccountTakedown","message":"Account has been suspended"}`))
+	}))
+	defer server.Close()
+	target := &listTarget{actor: firstDID, session: newSession(Config{AppView: server.URL}, server.Client(), nil)}
+	ctx := context.Background()
+	if err := target.ensureList(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !target.suspended.Load() {
+		t.Fatal("suspended profile still enabled")
+	}
+	if err := target.reconcileSubject(ctx, subjectState{did: ownerDID, follows: map[string]bool{firstDID: true}}, nil); err != nil {
+		t.Fatal(err)
+	}
+}
