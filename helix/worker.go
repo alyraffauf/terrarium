@@ -11,6 +11,22 @@ import (
 // The caller selects at most eight jobs. Public reads overlap, while the caller
 // retains sole ownership of authentication, exclusions, and list writes.
 func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *store) error {
+	actors := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if !target.suspended.Load() {
+			actors = append(actors, target.actor)
+		}
+	}
+	if len(actors) == 0 {
+		// Reactivating a target schedules a full backfill.
+		for _, work := range jobs {
+			if err := db.finish(ctx, work); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	defer func() { cancel(); workers.Wait() }()
@@ -20,10 +36,6 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 		err     error
 	}
 	results := make(chan checked, len(jobs))
-	actors := make([]string, 0, len(targets))
-	for _, target := range targets {
-		actors = append(actors, target.actor)
-	}
 	api := targets[0].session
 	for _, work := range jobs {
 		workers.Add(1)

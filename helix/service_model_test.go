@@ -2,7 +2,11 @@ package helix
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,5 +215,55 @@ func TestBatchProgressWhileResolverStalls(t *testing.T) {
 	}
 	if api.ChecksCompleted.Load() != 2 || w.RecordCount() != 1 {
 		t.Fatalf("completed %d jobs with %d items", api.ChecksCompleted.Load(), w.RecordCount())
+	}
+}
+
+type incompleteFollowInventory struct {
+	*m.World
+}
+
+func (transport incompleteFollowInventory) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Path != "/xrpc/com.atproto.repo.listRecords" {
+		return transport.World.RoundTrip(request)
+	}
+	if request.URL.Query().Get("cursor") != "" {
+		return nil, errors.New("follow inventory unavailable")
+	}
+	body := fmt.Sprintf(`{"cursor":"next","records":[{"uri":"at://%s/app.bsky.graph.follow/first","value":{"$type":"app.bsky.graph.follow","subject":"%s"}}]}`, m.Subject, m.Actors[0])
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
+func TestSuspendedTargetDoesNotBlockActiveMembership(t *testing.T) {
+	db, err := openStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := t.Context()
+	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.queueScan(ctx, m.Subject); err != nil {
+		t.Fatal(err)
+	}
+	work, err := db.next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := &m.World{Active: true}
+	client := &http.Client{Transport: incompleteFollowInventory{world}}
+	api := newSession(Config{Slingshot: "https://resolver.example", WriteInterval: time.Nanosecond}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+	active := &listTarget{actor: m.Actors[0], listURI: m.List(0), session: api}
+	suspended := &listTarget{actor: m.Actors[1], listURI: m.List(1), session: api}
+	suspended.suspended.Store(true)
+	if err := processBatch(ctx, []*listTarget{active, suspended}, []job{work}, db); err != nil {
+		t.Fatal(err)
+	}
+	if record := world.Record(recordKey(active.listURI + "\n" + m.Subject)); record == nil {
+		t.Fatal("active list is missing the follower found on the first page")
+	}
+	if pending, err := db.queries.PendingCount(ctx); err != nil || pending != 0 {
+		t.Fatalf("pending jobs = %d, err = %v", pending, err)
 	}
 }
