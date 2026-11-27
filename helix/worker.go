@@ -18,13 +18,9 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 		}
 	}
 	if len(actors) == 0 {
-		// Reactivating a target schedules a full backfill.
-		for _, work := range jobs {
-			if err := db.finish(ctx, work); err != nil {
-				return err
-			}
-		}
-		return nil
+		// Keep live candidates queued while the worker waits for a list to recover.
+		pause(ctx, time.Second)
+		return ctx.Err()
 	}
 
 	ctx, cancel := context.WithCancel(ctx)

@@ -267,3 +267,47 @@ func TestSuspendedTargetDoesNotBlockActiveMembership(t *testing.T) {
 		t.Fatalf("pending jobs = %d, err = %v", pending, err)
 	}
 }
+
+func TestSuspendedBatchRetainsJobsUntilTargetResumes(t *testing.T) {
+	db, err := openStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := t.Context()
+	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.queueScan(ctx, m.Subject); err != nil {
+		t.Fatal(err)
+	}
+	work, err := db.next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := &m.World{Active: true, Follows: 1}
+	client := &http.Client{Transport: world}
+	api := newSession(Config{Slingshot: "https://resolver.example", WriteInterval: time.Nanosecond}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+	target := &listTarget{actor: m.Actors[0], listURI: m.List(0), session: api}
+	targets := []*listTarget{target}
+	target.suspended.Store(true)
+	if err := processBatch(ctx, targets, []job{work}, db); err != nil {
+		t.Fatal(err)
+	}
+	next, err := db.next(ctx)
+	if err != nil || next != work {
+		t.Fatalf("after suspension got job %+v and error %v, want %+v", next, err, work)
+	}
+
+	target.suspended.Store(false)
+	if err := processBatch(ctx, targets, []job{next}, db); err != nil {
+		t.Fatal(err)
+	}
+	if world.Record(recordKey(target.listURI+"\n"+m.Subject)) == nil {
+		t.Fatal("resumed target did not add the queued follower")
+	}
+	if pending, err := db.queries.PendingCount(ctx); err != nil || pending != 0 {
+		t.Fatalf("pending jobs = %d, err = %v", pending, err)
+	}
+}
