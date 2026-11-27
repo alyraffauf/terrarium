@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
@@ -31,8 +32,11 @@ func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets 
 		// Indigo's RepoListRecords decoder rejects the whole page if a single
 		// record has an unknown type or malformed value. Decode values separately.
 		var page struct {
-			Cursor  string            `json:"cursor"`
-			Records []json.RawMessage `json:"records"`
+			atproto.RepoListRecords_Output
+			Records []struct {
+				atproto.RepoListRecords_Record
+				Value json.RawMessage `json:"value"`
+			} `json:"records"`
 		}
 		params := map[string]any{"repo": did, "collection": FollowCollection, "limit": 100}
 		if cursor != "" {
@@ -44,17 +48,10 @@ func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets 
 		if page.Records == nil {
 			return nil, fmt.Errorf("follow inventory response has no records array")
 		}
-		for _, raw := range page.Records {
-			var record struct {
-				URI   string          `json:"uri"`
-				Value json.RawMessage `json:"value"`
-			}
-			if err := json.Unmarshal(raw, &record); err != nil {
-				return nil, fmt.Errorf("decode follow record envelope: %w", err)
-			}
-			uri, err := syntax.ParseATURI(record.URI)
+		for _, record := range page.Records {
+			uri, err := syntax.ParseATURI(record.Uri)
 			if err != nil || uri.Authority().String() != did || uri.Collection().String() != FollowCollection || uri.RecordKey().String() == "" {
-				return nil, fmt.Errorf("unexpected follow record URI %q in repository %s", record.URI, did)
+				return nil, fmt.Errorf("unexpected follow record URI %q in repository %s", record.Uri, did)
 			}
 			var follow bsky.GraphFollow
 			if err := json.Unmarshal(record.Value, &follow); err != nil {
@@ -76,14 +73,14 @@ func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets 
 		if len(targets) > 0 && len(follows) == len(targets) {
 			return follows, nil
 		}
-		if page.Cursor == "" {
+		if page.Cursor == nil || *page.Cursor == "" {
 			break
 		}
-		if seen[page.Cursor] {
+		if seen[*page.Cursor] {
 			return nil, fmt.Errorf("follow inventory repeated pagination cursor")
 		}
-		seen[page.Cursor] = true
-		cursor = page.Cursor
+		seen[*page.Cursor] = true
+		cursor = *page.Cursor
 	}
 	return follows, nil
 }
