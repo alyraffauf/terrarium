@@ -3,6 +3,7 @@ package helix
 import (
 	"context"
 	"errors"
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"log/slog"
 	"sync"
 	"time"
@@ -52,7 +53,7 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 		if err == nil {
 			// A follow event may have arrived while a candidate's public reads ran.
 			// Never apply a stale exclusion snapshot to prefetched work.
-			if err := api.syncFollows(ctx, db, false); err != nil {
+			if err := followers.RefreshSnapshot(ctx, db, api.Client, false); err != nil {
 				slog.Error("follow refresh failed", "error", err)
 				if !pause(ctx, 10*time.Second) {
 					return ctx.Err()
@@ -68,10 +69,10 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 				continue
 			}
 			result.subject.excluded = followed || result.work.DID == api.Client.Auth.Did
-			result.subject.beforeWrite = db.checkFollowSnapshot
+			result.subject.beforeWrite = func(ctx context.Context) error { return followers.CheckSnapshot(ctx, db) }
 			err = applySubject(ctx, targets, result.work, result.subject, db)
 		}
-		if errors.Is(err, errFollowSnapshotSuperseded) {
+		if errors.Is(err, followers.ErrSnapshotSuperseded) {
 			continue
 		}
 		if err != nil {

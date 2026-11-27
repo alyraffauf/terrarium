@@ -54,7 +54,7 @@ func FuzzStreamRouting(f *testing.F) {
 			if got, err := db.resumeCursor(ctx, "wss://jet.example"); err != nil || got != cursor {
 				t.Fatalf("frame %d cursor %d want %d %v", i, got, cursor, err)
 			}
-			if got, _, err := db.followVersion(ctx); err != nil || got != version {
+			if got, _, err := db.FollowVersions(ctx); err != nil || got != version {
 				t.Fatalf("frame %d version %d want %d %v", i, got, version, err)
 			}
 			work, err := db.next(ctx)

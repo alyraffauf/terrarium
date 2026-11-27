@@ -2,6 +2,7 @@ package capensis
 
 import (
 	"errors"
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"net/http"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func FuzzServiceMembership(f *testing.F) {
 			if excluded {
 				following[m.Subject] = true
 			}
-			if err := db.applyFollowSnapshot(ctx, 0, following); err != nil {
+			if err := db.ApplyFollowSnapshot(ctx, 0, following); err != nil {
 				return err
 			}
 			var targets []*listTarget
@@ -64,7 +65,7 @@ func TestOwnerChangeDuringMembershipWrite(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := t.Context()
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.queueScan(ctx, m.Subject); err != nil {
@@ -83,7 +84,7 @@ func TestOwnerChangeDuringMembershipWrite(t *testing.T) {
 	client := &http.Client{Transport: w}
 	api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
 	target := &listTarget{pds: m.Hosts[0], session: api, listURI: m.List(0), target: &xrpc.Client{Host: m.Hosts[0], Client: client}}
-	if err := reconcileTargets(ctx, []*listTarget{target}, work, db); !errors.Is(err, errFollowSnapshotSuperseded) {
+	if err := reconcileTargets(ctx, []*listTarget{target}, work, db); !errors.Is(err, followers.ErrSnapshotSuperseded) {
 		t.Fatalf("stale reconciliation: %v", err)
 	}
 	if w.BeforeRecordRead != nil || w.RecordCount() != 0 {
@@ -105,7 +106,7 @@ func TestInterruptedRemovalAfterMigration(t *testing.T) {
 	w := &m.World{Unresolved: true, RejectDelete: "old"}
 	client := &http.Client{Transport: w}
 	api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	keys := []string{"old", "new"}
@@ -197,7 +198,7 @@ func TestRetryPreservesMovedListItem(t *testing.T) {
 	if err := db.RememberMember(ctx, m.Hosts[0], m.Subject, "key"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.queueScan(ctx, m.Subject); err != nil {

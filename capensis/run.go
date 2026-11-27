@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -105,7 +106,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			continue
 		}
 		forceFollowRefresh := !time.Now().Before(nextFollows)
-		if err := api.syncFollows(ctx, db, forceFollowRefresh); err != nil {
+		if err := followers.RefreshSnapshot(ctx, db, api.Client, forceFollowRefresh); err != nil {
 			slog.Error("follow refresh failed", "error", err)
 			if !pause(ctx, 10*time.Second) {
 				break
@@ -133,7 +134,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			return err
 		}
 		if err := reconcileTargets(ctx, targets, work, db); err != nil {
-			if errors.Is(err, errFollowSnapshotSuperseded) {
+			if errors.Is(err, followers.ErrSnapshotSuperseded) {
 				continue
 			}
 			if ctx.Err() != nil {
@@ -245,7 +246,7 @@ func reconcileTargets(ctx context.Context, targets []*listTarget, work job, db *
 		return err
 	}
 	if subject.did != targets[0].Client.Auth.Did {
-		subject.beforeWrite = db.checkFollowSnapshot
+		subject.beforeWrite = func(ctx context.Context) error { return followers.CheckSnapshot(ctx, db) }
 	}
 	var failures []error
 	for _, target := range targets {

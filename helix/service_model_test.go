@@ -40,7 +40,7 @@ func FuzzServiceMembership(f *testing.F) {
 			if excluded {
 				following[m.Subject] = true
 			}
-			if err := db.applyFollowSnapshot(ctx, 0, following); err != nil {
+			if err := db.ApplyFollowSnapshot(ctx, 0, following); err != nil {
 				return err
 			}
 			var targets []*listTarget
@@ -68,7 +68,7 @@ func TestOwnerChangeDuringMembershipWrite(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := t.Context()
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.queueScan(ctx, m.Subject); err != nil {
@@ -109,7 +109,7 @@ func TestInterruptedRemovalAfterMigration(t *testing.T) {
 	w := &m.World{Unresolved: true, RejectDelete: "old"}
 	client := &http.Client{Transport: w}
 	api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.saveCandidatePDS(ctx, m.Subject, m.Hosts[0]); err != nil {
@@ -168,7 +168,7 @@ func TestBatchProgressWhileResolverStalls(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	stalled := make(chan struct{})
@@ -195,7 +195,7 @@ func TestBatchProgressWhileResolverStalls(t *testing.T) {
 	w.AfterCreate = func(did string) {
 		if did == m.Subject {
 			// A fresh exclusion arrives while the slower job is fetching public state.
-			if err := db.applyFollowSnapshot(ctx, 0, map[string]bool{slow: true}); err != nil {
+			if err := db.ApplyFollowSnapshot(ctx, 0, map[string]bool{slow: true}); err != nil {
 				t.Error(err)
 			}
 			close(released)
@@ -240,7 +240,7 @@ func TestSuspendedTargetDoesNotBlockActiveMembership(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := t.Context()
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.queueScan(ctx, m.Subject); err != nil {
@@ -275,7 +275,7 @@ func TestSuspendedBatchRetainsJobsUntilTargetResumes(t *testing.T) {
 	}
 	defer db.Close()
 	ctx := t.Context()
-	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.queueScan(ctx, m.Subject); err != nil {

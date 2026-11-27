@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -107,7 +108,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			continue
 		}
 		forceFollowRefresh := !time.Now().Before(nextFollows)
-		if err := api.syncFollows(ctx, db, forceFollowRefresh); err != nil {
+		if err := followers.RefreshSnapshot(ctx, db, api.Client, forceFollowRefresh); err != nil {
 			slog.Error("follow refresh failed", "error", err)
 			if !pause(ctx, 10*time.Second) {
 				break

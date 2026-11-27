@@ -39,9 +39,9 @@ func FuzzDurableState(f *testing.F) {
 				_, err := db.conn.Exec("UPDATE pending SET ready=unixepoch() WHERE ready=253402300799")
 				return err
 			},
-			Snapshot: func(v int64, m map[string]bool) error { return db.applyFollowSnapshot(ctx, v, m) },
+			Snapshot: func(v int64, m map[string]bool) error { return db.ApplyFollowSnapshot(ctx, v, m) },
 			Followed: func(d string) (bool, error) { return db.isFollowed(ctx, d) },
-			Versions: func() (int64, int64, error) { return db.followVersion(ctx) },
+			Versions: func() (int64, int64, error) { return db.FollowVersions(ctx) },
 		}
 	})
 }
@@ -69,7 +69,7 @@ func TestEventCheckpointRollbackAndGapReset(t *testing.T) {
 	if _, err := db.next(ctx); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("queued work from aborted transaction: %v", err)
 	}
-	if v, _, err := db.followVersion(ctx); err != nil || v != 0 {
+	if v, _, err := db.FollowVersions(ctx); err != nil || v != 0 {
 		t.Fatalf("owner version %d %v", v, err)
 	}
 	if _, err := db.conn.Exec("DROP TRIGGER reject_checkpoint"); err != nil {

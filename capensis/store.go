@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"time"
 
 	"github.com/alyraffauf/terrarium/capensis/storage"
@@ -196,21 +197,19 @@ func (db *store) ForgetMember(ctx context.Context, pds, key string) error {
 func (db *store) isFollowed(ctx context.Context, did string) (bool, error) {
 	return db.queries.IsFollowed(ctx, did)
 }
-func (db *store) followVersion(ctx context.Context) (version, applied int64, err error) {
+func (db *store) FollowVersions(ctx context.Context) (version, applied int64, err error) {
 	state, err := db.queries.GetState(ctx)
 	return state.FollowVersion, state.FollowApplied, err
 }
 
-var errFollowSnapshotSuperseded = errors.New("owner follows changed during refresh")
-
-func (db *store) applyFollowSnapshot(ctx context.Context, version int64, follows map[string]bool) error {
+func (db *store) ApplyFollowSnapshot(ctx context.Context, version int64, follows map[string]bool) error {
 	return db.transaction(ctx, func(queries *storage.Queries) error {
 		state, err := queries.GetState(ctx)
 		if err != nil {
 			return err
 		}
 		if state.FollowVersion != version {
-			return errFollowSnapshotSuperseded
+			return followers.ErrSnapshotSuperseded
 		}
 		if err := queries.ClearNewFollows(ctx); err != nil {
 			return err
