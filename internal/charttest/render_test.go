@@ -161,21 +161,24 @@ func TestMetricsPortsAgree(t *testing.T) {
 	}
 }
 
-func TestMetricsServiceNameFitsLongReleases(t *testing.T) {
+func TestMetricsServiceNameFitsHelmReleases(t *testing.T) {
 	for _, app := range []string{"helix", "capensis"} {
 		t.Run(app, func(t *testing.T) {
 			values := map[string]any{"identifier": "owner.example", "existingSecret": "secret", "pds": []string{"a.example"}, "accounts": []string{"a.example"}, "metrics": map[string]any{"enabled": true}}
 			names := map[string]bool{}
-			for _, ending := range []string{"a", "b"} {
-				release := strings.Repeat("x", 52) + ending
+			longPrefix := strings.Repeat("x", 52)
+			for _, release := range []string{longPrefix + "a", longPrefix + "b", "east.prod-1", "east-prod.1", "east-prod-1", "1-east"} {
 				docs, err := renderRelease(t, release, app, values)
 				if err != nil {
 					t.Fatal(err)
 				}
 				service := docs["Service"]
 				name := service.Metadata.Name
-				if len(name) > 63 || !strings.HasSuffix(name, "-"+app+"-metrics") {
+				if len(name) > 63 || strings.Contains(name, ".") || !strings.HasSuffix(name, "-"+app+"-metrics") {
 					t.Errorf("invalid metrics Service name %q", name)
+				}
+				if release == "1-east" && name != release+"-"+app+"-metrics" {
+					t.Errorf("changed the existing name for numeric release %q to %q", release, name)
 				}
 				if names[name] {
 					t.Errorf("colliding metrics Service name %q", name)

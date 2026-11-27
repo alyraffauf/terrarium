@@ -83,4 +83,6 @@ helm upgrade --install capensis ./capensis/charts/capensis \
 
 The [chart values](charts/capensis/values.yaml) cover endpoints, list bindings, image tags, and storage. The chart uses one replica, `Recreate` rollouts, and a PVC retained on uninstall. Set `persistence.existingClaim` to reuse a volume. Pin a `sha-<commit>` image tag for repeatable deployments.
 
+If you enable metrics, start the release name with a letter unless your cluster allows numeric Service name prefixes through `RelaxedServiceNameValidation`.
+
 See the [build and test commands](../README.md#build-and-test).
