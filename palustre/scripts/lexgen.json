@@ -1,4 +1,0 @@
-[
-  {"package":"listlex","prefix":"app.bsky","outdir":"palustre/listlex","import":"github.com/alyraffauf/terrarium/palustre/listlex"},
-  {"package":"atproto","prefix":"com.atproto","outdir":"unused","import":"github.com/bluesky-social/indigo/api/atproto"}
-]

@@ -1,0 +1,8 @@
+[
+  {
+    "package": "microcosm",
+    "prefix": "blue.microcosm",
+    "outdir": "palustre/microcosm",
+    "import": "github.com/alyraffauf/terrarium/palustre/microcosm"
+  }
+]

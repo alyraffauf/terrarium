@@ -34,10 +34,10 @@ After editing SQL queries or lexicons, regenerate the committed Go files:
 ```sh
 nix develop -c ./capensis/scripts/generate-db.sh
 nix develop -c ./helix/scripts/generate-db.sh
-nix develop -c ./palustre/scripts/generate.sh
+nix develop -c ./palustre/microcosm/generate.sh
 ```
 
-SQL queries use sqlc. Schema changes need a new Goose migration in the application's `storage/migrations/` directory. Generation reads `palustre/lexicons/` and external definitions from the Indigo revision in `go.mod`.
+SQL queries use sqlc. Schema changes need a new Goose migration in the application's `storage/migrations/` directory. AT Protocol and Bluesky operations use Indigo’s generated lexicon types. The [Microcosm clients](palustre/microcosm/) use the same pinned Indigo generator for Slingshot and Constellation.
 
 ## CI and dependency updates
 

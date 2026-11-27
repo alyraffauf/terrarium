@@ -45,8 +45,8 @@ jobs:
         run: |
           nix develop -c ./capensis/scripts/generate-db.sh
           nix develop -c ./helix/scripts/generate-db.sh
-          nix develop -c ./palustre/scripts/generate.sh
-          git diff --exit-code -- capensis/storage helix/storage palustre/listlex
+          nix develop -c ./palustre/microcosm/generate.sh
+          git diff --exit-code -- capensis/storage helix/storage palustre/microcosm
 
   containers:
     needs: [discover, test, nix]
