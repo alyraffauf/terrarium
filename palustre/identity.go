@@ -25,6 +25,7 @@ func NormalizePDS(raw string) (string, error) {
 	}
 	endpoint.Host = host
 	endpoint.Path = ""
+	endpoint.ForceQuery = false
 	return endpoint.String(), nil
 }
 
@@ -54,6 +55,7 @@ func NormalizeJetstream(raw string) (string, error) {
 	if stream.Path != StreamPath || stream.RawQuery != "" || stream.Fragment != "" {
 		return "", fmt.Errorf("jetstream must be a base URL or the v2 subscribeEvents URL without query parameters")
 	}
+	stream.ForceQuery = false
 	return stream.String(), nil
 }
 
