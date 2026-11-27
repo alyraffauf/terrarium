@@ -29,11 +29,11 @@ func ClassifyFrame(raw []byte) (Event, error) {
 		return event, fmt.Errorf("%w: malformed JSON", ErrStreamGap)
 	}
 	if event.Type == "error" {
-		switch event.Error {
+		switch event.ErrStr {
 		case "CursorTooOld", "OutdatedCursor", "FutureCursor":
 			return event, ErrStreamGap
 		default:
-			return event, fmt.Errorf("Jetstream %s: %s", event.Error, event.Message)
+			return event, fmt.Errorf("Jetstream %s: %s", event.ErrStr, event.Message)
 		}
 	}
 
@@ -54,13 +54,13 @@ func ClassifyFrame(raw []byte) (Event, error) {
 	default:
 		validEnvelope = false
 	}
-	timestamp := payload.WitnessedAt
-	if timestamp == "" {
-		timestamp = payload.Time
+	timestamp := payload.Time
+	if payload.WitnessedAt != nil && *payload.WitnessedAt != "" {
+		timestamp = *payload.WitnessedAt
 	}
 	var err error
 	event.Witnessed, err = time.Parse(time.RFC3339Nano, timestamp)
-	_, didErr := syntax.ParseDID(payload.DID)
+	_, didErr := syntax.ParseDID(payload.Did)
 	if !validEnvelope || err != nil || didErr != nil {
 		event.Recover = true
 		return event, nil

@@ -1,24 +1,24 @@
 package palustre
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/alyraffauf/terrarium/palustre/jetstream"
+	"github.com/bluesky-social/indigo/xrpc"
+)
 
 const StreamPath = "/xrpc/network.bsky.jetstream.subscribeEvents"
 const EventPrefix = "network.bsky.jetstream.subscribeEvents#"
 
 type Frame struct {
-	Type    string `json:"$type"`
-	Error   string `json:"error"`
-	Message string `json:"message"`
+	Type string `json:"$type"`
+	xrpc.XRPCError
 	Payload struct {
-		Type        string          `json:"$type"`
-		DID         string          `json:"did"`
-		Seq         int64           `json:"seq"`
-		Time        string          `json:"time"`
-		WitnessedAt string          `json:"witnessedAt"`
-		Collection  string          `json:"collection"`
-		Name        string          `json:"name"`
-		Rkey        string          `json:"rkey"`
-		Operation   string          `json:"operation"`
-		Record      json.RawMessage `json:"record"`
+		// The classifier reads the common event fields and commit metadata.
+		// Defer record decoding so an unknown record cannot invalidate the cursor.
+		jetstream.SubscribeEvents_Commit
+		jetstream.SubscribeEvents_Info
+		Type   string          `json:"$type"`
+		Record json.RawMessage `json:"record"`
 	} `json:"payload"`
 }

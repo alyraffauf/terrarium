@@ -75,23 +75,23 @@ func ingestFrame(ctx context.Context, db *store, endpoint, owner string, payload
 	}
 	update := event.Payload
 	did := ""
-	known, err := db.knownCandidate(ctx, update.DID)
+	known, err := db.knownCandidate(ctx, update.Did)
 	if err != nil {
 		return err
 	}
 	switch event.Kind {
 	case "identity", "account":
 		if known {
-			did = update.DID
+			did = update.Did
 		}
 	case "sync":
-		did = update.DID
+		did = update.Did
 	case "commit":
 		if update.Collection == palustre.FollowCollection && (event.MalformedFollow || watched[event.FollowSubject] || known) {
-			did = update.DID
+			did = update.Did
 		}
 	}
-	followChanged := update.DID == owner && (event.Kind == "sync" || event.Kind == "commit" && update.Collection == palustre.FollowCollection)
+	followChanged := update.Did == owner && (event.Kind == "sync" || event.Kind == "commit" && update.Collection == palustre.FollowCollection)
 	if did == "" && !followChanged && !saveUnrelated {
 		return nil
 	}

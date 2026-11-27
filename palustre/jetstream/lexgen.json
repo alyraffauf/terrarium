@@ -1,0 +1,13 @@
+[
+    {
+        "package": "jetstream",
+        "prefix": "network.bsky.jetstream",
+        "outdir": "palustre/jetstream",
+        "import": "github.com/alyraffauf/terrarium/palustre/jetstream"
+    },
+    {
+        "package": "atproto",
+        "prefix": "com.atproto",
+        "import": "github.com/bluesky-social/indigo/api/atproto"
+    }
+]

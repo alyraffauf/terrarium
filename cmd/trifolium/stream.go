@@ -142,16 +142,16 @@ func (a *service) ingest(ctx context.Context, raw []byte) error {
 				return err
 			}
 		case event.Kind == "sync":
-			if _, err := tx.Exec(dirty, p.DID); err != nil {
+			if _, err := tx.Exec(dirty, p.Did); err != nil {
 				return err
 			}
 		case event.Kind == "account" || event.Kind == "identity":
-			known, err := a.knownActor(tx, p.DID)
+			known, err := a.knownActor(tx, p.Did)
 			if err != nil {
 				return err
 			}
 			if known {
-				if _, err := tx.Exec(dirty, p.DID); err != nil {
+				if _, err := tx.Exec(dirty, p.Did); err != nil {
 					return err
 				}
 			}
@@ -185,38 +185,38 @@ OR EXISTS(SELECT 1 FROM scans WHERE did=?1)`, did).Scan(&known)
 
 func (a *service) recoverFollowEvent(tx *sql.Tx, event palustre.Event) error {
 	p := event.Payload
-	known, err := a.knownActor(tx, p.DID)
+	known, err := a.knownActor(tx, p.Did)
 	if err != nil || !known {
 		return err
 	}
 	if _, err := syntax.ParseRecordKey(p.Rkey); err == nil {
-		if _, err := tx.Exec("DELETE FROM hints WHERE did=? AND rkey=?", p.DID, p.Rkey); err != nil {
+		if _, err := tx.Exec("DELETE FROM hints WHERE did=? AND rkey=?", p.Did, p.Rkey); err != nil {
 			return err
 		}
-	} else if _, err := tx.Exec("DELETE FROM hints WHERE did=?", p.DID); err != nil {
+	} else if _, err := tx.Exec("DELETE FROM hints WHERE did=?", p.Did); err != nil {
 		return err
 	}
-	_, err = tx.Exec(dirty, p.DID)
+	_, err = tx.Exec(dirty, p.Did)
 	return err
 }
 
 func (a *service) applyFollowEvent(tx *sql.Tx, event palustre.Event) error {
 	p := event.Payload
-	if p.Operation == "create" && !a.targets[event.FollowSubject] && p.DID != a.owner {
+	if p.Operation == "create" && !a.targets[event.FollowSubject] && p.Did != a.owner {
 		return nil
 	}
-	if _, err := tx.Exec("DELETE FROM hints WHERE did=? AND rkey=?", p.DID, p.Rkey); err != nil {
+	if _, err := tx.Exec("DELETE FROM hints WHERE did=? AND rkey=?", p.Did, p.Rkey); err != nil {
 		return err
 	}
-	if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND rkey=?", p.DID, p.Rkey); err != nil {
+	if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND rkey=?", p.Did, p.Rkey); err != nil {
 		return err
 	}
-	if p.Operation != "delete" && (a.targets[event.FollowSubject] || p.DID == a.owner) {
-		if _, err := tx.Exec("INSERT INTO edges VALUES(?,?,?)", p.DID, p.Rkey, event.FollowSubject); err != nil {
+	if p.Operation != "delete" && (a.targets[event.FollowSubject] || p.Did == a.owner) {
+		if _, err := tx.Exec("INSERT INTO edges VALUES(?,?,?)", p.Did, p.Rkey, event.FollowSubject); err != nil {
 			return err
 		}
 	}
 	// Invalidate any inventory started before this record changed.
-	_, err := tx.Exec("UPDATE scans SET version=version+1,due=0 WHERE did=?", p.DID)
+	_, err := tx.Exec("UPDATE scans SET version=version+1,due=0 WHERE did=?", p.Did)
 	return err
 }

@@ -76,13 +76,13 @@ func ingestFrame(ctx context.Context, db *store, endpoint, owner string, payload
 	did := ""
 	switch event.Kind {
 	case "identity", "account", "sync":
-		did = update.DID
+		did = update.Did
 	case "commit":
 		if event.MalformedFollow {
-			did = update.DID
+			did = update.Did
 		}
 	}
-	followChanged := update.DID == owner && (event.Kind == "sync" || event.Kind == "commit" && update.Collection == palustre.FollowCollection)
+	followChanged := update.Did == owner && (event.Kind == "sync" || event.Kind == "commit" && update.Collection == palustre.FollowCollection)
 	if did == "" && !followChanged && !saveUnrelated {
 		return nil
 	}

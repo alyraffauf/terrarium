@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/gorilla/websocket"
 )
 
@@ -30,10 +31,8 @@ func Stream(ctx context.Context, endpoint string, cursor int64, handle func([]by
 	connection, response, err := dialer.DialContext(ctx, parsed.String(), nil)
 	if response != nil && response.Body != nil {
 		if err != nil {
-			var rejection struct {
-				Error string `json:"error"`
-			}
-			if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&rejection) == nil && rejection.Error == "CursorTooOld" {
+			var rejection xrpc.XRPCError
+			if json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&rejection) == nil && rejection.ErrStr == "CursorTooOld" {
 				err = ErrStreamGap
 			}
 		}
