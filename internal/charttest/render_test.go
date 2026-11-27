@@ -27,12 +27,11 @@ type container struct {
 	Ports []port
 }
 type manifest struct {
-	Kind string
-	Spec struct {
+	Kind     string
+	Metadata struct{ Name string }
+	Spec     struct {
 		Ports    []port
-		Selector struct {
-			MatchLabels map[string]any `yaml:"matchLabels"`
-		}
+		Selector map[string]any
 		Template struct {
 			Metadata struct {
 				Annotations map[string]string
@@ -45,11 +44,16 @@ type manifest struct {
 
 func render(t *testing.T, app string, values map[string]any) (map[string]manifest, error) {
 	t.Helper()
+	return renderRelease(t, "null", app, values)
+}
+
+func renderRelease(t *testing.T, release, app string, values map[string]any) (map[string]manifest, error) {
+	t.Helper()
 	helm := os.Getenv("HELM")
 	if helm == "" {
 		helm = "helm"
 	}
-	cmd := exec.CommandContext(t.Context(), helm, "template", "null", "../../"+app+"/charts/"+app, "--values", "-")
+	cmd := exec.CommandContext(t.Context(), helm, "template", release, "../../"+app+"/charts/"+app, "--values", "-")
 	data, err := json.Marshal(values)
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +101,8 @@ func TestRenderedDaemonArguments(t *testing.T) {
 					t.Fatal(err)
 				}
 				deploy := docs["Deployment"]
-				for _, labels := range []map[string]any{deploy.Spec.Selector.MatchLabels, deploy.Spec.Template.Metadata.Labels} {
+				matchLabels, _ := deploy.Spec.Selector["matchLabels"].(map[string]any)
+				for _, labels := range []map[string]any{matchLabels, deploy.Spec.Template.Metadata.Labels} {
 					if got := labels["app.kubernetes.io/instance"]; got != "null" {
 						t.Errorf("expected string instance label %q, got %#v", "null", got)
 					}
@@ -143,10 +148,44 @@ func TestMetricsPortsAgree(t *testing.T) {
 				t.Fatalf("%s pod metrics mismatch for %d", app, n)
 			}
 			service := docs["Service"]
+			if service.Metadata.Name != "null-"+app+"-metrics" {
+				t.Errorf("%s Service name changed to %q", app, service.Metadata.Name)
+			}
+			if service.Spec.Selector["app.kubernetes.io/instance"] != "null" {
+				t.Errorf("%s Service selector does not match the instance label", app)
+			}
 			if len(service.Spec.Ports) != 1 || service.Spec.Ports[0].Port != n {
 				t.Fatalf("%s Service port mismatch", app)
 			}
 		}
+	}
+}
+
+func TestMetricsServiceNameFitsLongReleases(t *testing.T) {
+	for _, app := range []string{"helix", "capensis"} {
+		t.Run(app, func(t *testing.T) {
+			values := map[string]any{"identifier": "owner.example", "existingSecret": "secret", "pds": []string{"a.example"}, "accounts": []string{"a.example"}, "metrics": map[string]any{"enabled": true}}
+			names := map[string]bool{}
+			for _, ending := range []string{"a", "b"} {
+				release := strings.Repeat("x", 52) + ending
+				docs, err := renderRelease(t, release, app, values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				service := docs["Service"]
+				name := service.Metadata.Name
+				if len(name) > 63 || !strings.HasSuffix(name, "-"+app+"-metrics") {
+					t.Errorf("invalid metrics Service name %q", name)
+				}
+				if names[name] {
+					t.Errorf("colliding metrics Service name %q", name)
+				}
+				names[name] = true
+				if service.Spec.Selector["app.kubernetes.io/instance"] != release {
+					t.Errorf("Service selector does not match the release %q", release)
+				}
+			}
+		})
 	}
 }
 
