@@ -40,13 +40,13 @@ func TestBatchAppliesReadyResultBeforeSlowPDSAndRechecksExclusions(t *testing.T)
 			}
 			json.NewEncoder(w).Encode(map[string]string{"did": did, "pds": server.URL})
 		case "/xrpc/com.atproto.sync.getRepoStatus":
-			fmt.Fprint(w, `{"active":true}`)
+			fmt.Fprintf(w, `{"did":%q,"active":true}`, r.URL.Query().Get("did"))
 		case "/xrpc/com.atproto.repo.listRecords":
 			subject := firstDID
 			if r.URL.Query().Get("repo") == ownerDID {
 				subject = followerDID
 			}
-			fmt.Fprintf(w, `{"records":[{"value":{"subject":%q}}]}`, subject)
+			fmt.Fprintf(w, `{"records":[{"uri":"at://%s/app.bsky.graph.follow/first","value":{"$type":"app.bsky.graph.follow","subject":%q}}]}`, r.URL.Query().Get("repo"), subject)
 		case "/xrpc/com.atproto.repo.getRecord":
 			http.Error(w, `{"error":"RecordNotFound"}`, 404)
 		case "/xrpc/com.atproto.repo.putRecord":

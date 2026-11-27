@@ -184,7 +184,11 @@ func TestMovedItemIsNeverDeleted(t *testing.T) {
 func TestMalformedFollowsAreSkipped(t *testing.T) {
 	db := testStore(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"records":[{"value":{"subject":42}},{"value":{"subject":"bad"}},{"value":{"subject":%q}}]}`, testDID)
+		fmt.Fprintf(w, `{"records":[
+			{"uri":"at://%s/app.bsky.graph.follow/malformed","value":{"$type":"app.bsky.graph.follow","subject":42}},
+			{"uri":"at://%s/app.bsky.graph.follow/invalid","value":{"$type":"app.bsky.graph.follow","subject":"bad"}},
+			{"uri":"at://%s/app.bsky.graph.follow/valid","value":{"$type":"app.bsky.graph.follow","subject":%q}}
+		]}`, ownerDID, ownerDID, ownerDID, testDID)
 	}))
 	defer server.Close()
 	api := &listTarget{session: newSession(Config{}, nil, &xrpc.Client{Host: server.URL, Client: server.Client(), Auth: &xrpc.AuthInfo{Did: ownerDID}})}

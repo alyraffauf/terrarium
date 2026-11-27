@@ -130,8 +130,11 @@ func TestMultipleListsFollowExclusionsAndDeletion(t *testing.T) {
 				}
 			}
 			values := []any{}
-			for _, did := range subjects {
-				values = append(values, map[string]any{"value": map[string]string{"subject": did}})
+			for index, did := range subjects {
+				values = append(values, map[string]any{
+					"uri":   fmt.Sprintf("at://%s/app.bsky.graph.follow/%d", r.URL.Query().Get("repo"), index),
+					"value": map[string]string{"$type": "app.bsky.graph.follow", "subject": did},
+				})
 			}
 			json.NewEncoder(w).Encode(map[string]any{"records": values})
 		case "/xrpc/com.atproto.repo.getRecord":

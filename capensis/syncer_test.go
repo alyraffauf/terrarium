@@ -138,7 +138,7 @@ func TestMembershipMigrationDeletionAndFollowExclusion(t *testing.T) {
 				return
 			}
 			if followed {
-				fmt.Fprintf(w, `{"records":[{"value":{"subject":%q}}]}`, testDID)
+				fmt.Fprintf(w, `{"records":[{"uri":"at://%s/app.bsky.graph.follow/first","value":{"$type":"app.bsky.graph.follow","subject":%q}}]}`, ownerDID, testDID)
 			} else {
 				fmt.Fprint(w, `{"records":[]}`)
 			}

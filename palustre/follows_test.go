@@ -30,14 +30,14 @@ func TestTargetFollowsStopsOnlyWhenAllTargetsAreFound(t *testing.T) {
 				pages++
 				w.Header().Set("Content-Type", "application/json")
 				if r.URL.Query().Get("cursor") == "" {
-					fmt.Fprintf(w, `{"cursor":"next","records":[{"value":{"subject":%q}}]}`, first)
+					fmt.Fprintf(w, `{"cursor":"next","records":[{"uri":"at://%s/app.bsky.graph.follow/first","value":{"$type":"app.bsky.graph.follow","subject":%q}}]}`, first, first)
 					return
 				}
 				if scenario.fail {
 					http.Error(w, `{"error":"Unavailable"}`, 503)
 					return
 				}
-				fmt.Fprintf(w, `{"records":[{"value":{"subject":%q}}]}`, second)
+				fmt.Fprintf(w, `{"records":[{"uri":"at://%s/app.bsky.graph.follow/second","value":{"$type":"app.bsky.graph.follow","subject":%q}}]}`, first, second)
 			}))
 			defer server.Close()
 			client := &xrpc.Client{Host: server.URL, Client: server.Client()}

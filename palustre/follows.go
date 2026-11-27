@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/xrpc"
@@ -27,37 +28,53 @@ func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets 
 	seen := make(map[string]bool)
 	cursor := ""
 	for {
+		// Indigo's RepoListRecords decoder rejects the whole page if a single
+		// record has an unknown type or malformed value. Decode values separately.
 		var page struct {
-			Cursor  string `json:"cursor"`
-			Records []struct {
-				Value json.RawMessage `json:"value"`
-			} `json:"records"`
+			Cursor  string            `json:"cursor"`
+			Records []json.RawMessage `json:"records"`
 		}
-		params := map[string]any{"repo": did, "collection": "app.bsky.graph.follow", "limit": 100}
+		params := map[string]any{"repo": did, "collection": FollowCollection, "limit": 100}
 		if cursor != "" {
 			params["cursor"] = cursor
 		}
 		if err := client.LexDo(ctx, lexutil.Query, "", "com.atproto.repo.listRecords", params, nil, &page); err != nil {
 			return nil, err
 		}
-		for _, record := range page.Records {
-			var follow struct {
-				Subject string `json:"subject"`
+		if page.Records == nil {
+			return nil, fmt.Errorf("follow inventory response has no records array")
+		}
+		for _, raw := range page.Records {
+			var record struct {
+				URI   string          `json:"uri"`
+				Value json.RawMessage `json:"value"`
 			}
+			if err := json.Unmarshal(raw, &record); err != nil {
+				return nil, fmt.Errorf("decode follow record envelope: %w", err)
+			}
+			uri, err := syntax.ParseATURI(record.URI)
+			if err != nil || uri.Authority().String() != did || uri.Collection().String() != FollowCollection || uri.RecordKey().String() == "" {
+				return nil, fmt.Errorf("unexpected follow record URI %q in repository %s", record.URI, did)
+			}
+			var follow bsky.GraphFollow
 			if err := json.Unmarshal(record.Value, &follow); err != nil {
-				slog.Warn("skipping malformed follow record", "error", err)
+				slog.WarnContext(ctx, "skipping malformed follow record", "error", err)
 				continue
 			}
 			if _, err := syntax.ParseDID(follow.Subject); err != nil {
-				slog.Warn("skipping invalid follow subject", "error", err)
+				slog.WarnContext(ctx, "skipping invalid follow subject", "error", err)
+				continue
+			}
+			if follow.LexiconTypeID != FollowCollection {
+				slog.WarnContext(ctx, "skipping unexpected record type in follow inventory", "type", follow.LexiconTypeID)
 				continue
 			}
 			if targets == nil || targets[follow.Subject] {
 				follows[follow.Subject] = true
 			}
-			if len(targets) > 0 && len(follows) == len(targets) {
-				return follows, nil
-			}
+		}
+		if len(targets) > 0 && len(follows) == len(targets) {
+			return follows, nil
 		}
 		if page.Cursor == "" {
 			break
