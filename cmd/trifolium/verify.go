@@ -7,12 +7,14 @@ import (
 	"fmt"
 
 	"github.com/alyraffauf/terrarium/palustre"
+	"github.com/bluesky-social/indigo/api/atproto"
+	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	lex "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/xrpc"
 )
 
-const followCollection = "app.bsky.graph.follow"
+const followCollection = palustre.FollowCollection
 
 type verifyJob struct {
 	did, key, target string
@@ -89,35 +91,58 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 	} else {
 		_, retry = a.ExecContext(ctx, "UPDATE scans SET due=unixepoch()+? WHERE did=? AND version=?", delay, j.did, j.version)
 	}
+	if err != nil && j.did == a.owner {
+		err = fmt.Errorf("owner follow inventory unavailable; list additions waiting: %w", err)
+	}
 	return errors.Join(err, retry)
 }
 
-type followRecord struct {
-	URI   string
-	Value struct {
-		Subject string
-		Type    string `json:"$type"`
+func parseFollow(did, rawURI string, value *lex.LexiconTypeDecoder) (key, subject string, err error) {
+	uri, err := syntax.ParseATURI(rawURI)
+	if err != nil {
+		return "", "", err
 	}
+	if uri.Authority().String() != did || uri.Collection().String() != followCollection || uri.RecordKey() == "" {
+		return "", "", fmt.Errorf("unexpected follow record URI %q", rawURI)
+	}
+	if value == nil {
+		return "", "", fmt.Errorf("missing follow record value for %s", uri)
+	}
+	record, ok := value.Val.(*bsky.GraphFollow)
+	if !ok || record == nil || record.LexiconTypeID != followCollection {
+		return "", "", fmt.Errorf("unexpected follow record type for %s", uri)
+	}
+	if _, err := syntax.ParseDID(record.Subject); err != nil {
+		return "", "", fmt.Errorf("invalid follow subject for %s: %w", uri, err)
+	}
+	return uri.RecordKey().String(), record.Subject, nil
 }
 
 func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) error {
-	var r followRecord
-	err := c.LexDo(ctx, lex.Query, "", "com.atproto.repo.getRecord", map[string]any{"repo": j.did, "collection": followCollection, "rkey": j.key}, nil, &r)
+	record, err := atproto.RepoGetRecord(ctx, c, "", followCollection, j.did, j.key)
 	if err != nil && !palustre.XRPCCode(err, "RecordNotFound") {
 		return err
 	}
-	if err == nil && r.URI != "at://"+j.did+"/"+followCollection+"/"+j.key {
-		return errors.New("unexpected follow record URI")
+	var matches bool
+	if err == nil {
+		key, subject, err := parseFollow(j.did, record.Uri, record.Value)
+		if err != nil {
+			return err
+		}
+		if key != j.key {
+			return fmt.Errorf("unexpected follow record key %q", key)
+		}
+		matches = subject == j.target
 	}
 	return a.transaction(ctx, func(tx *sql.Tx) error {
 		// A Jetstream mutation deletes this exact hint, invalidating an older HTTP response.
-		if err == nil && r.Value.Type == followCollection && r.Value.Subject == j.target {
-			if _, e := tx.Exec("INSERT OR REPLACE INTO edges SELECT did,rkey,target FROM hints WHERE id=?", j.id); e != nil {
-				return e
+		if matches {
+			if _, err := tx.Exec("INSERT OR REPLACE INTO edges SELECT did,rkey,target FROM hints WHERE id=?", j.id); err != nil {
+				return err
 			}
 		}
-		_, e := tx.Exec("DELETE FROM hints WHERE id=?", j.id)
-		return e
+		_, err := tx.Exec("DELETE FROM hints WHERE id=?", j.id)
+		return err
 	})
 }
 
@@ -127,31 +152,36 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	params := map[string]any{"repo": j.did, "collection": followCollection, "limit": 100}
-	if cursor != "" {
-		params["cursor"] = cursor
-	}
-	var page struct {
-		Cursor  string
-		Records []followRecord
-	}
-	if err = c.LexDo(ctx, lex.Query, "", "com.atproto.repo.listRecords", params, nil, &page); err != nil {
+	page, err := atproto.RepoListRecords(ctx, c, followCollection, cursor, 100, j.did, false)
+	if err != nil {
 		return err
 	}
+	if page.Records == nil {
+		return errors.New("follow inventory has no records array")
+	}
+	seen := map[string]bool{}
 	records := map[string]string{}
-	for _, r := range page.Records {
-		uri, err := syntax.ParseATURI(r.URI)
+	for _, record := range page.Records {
+		if record == nil {
+			return errors.New("follow inventory contains a null record")
+		}
+		key, subject, err := parseFollow(j.did, record.Uri, record.Value)
 		if err != nil {
 			return err
 		}
-		if uri.Authority().String() != j.did || uri.Collection().String() != followCollection || uri.RecordKey() == "" {
-			return fmt.Errorf("unexpected inventory URI %s", r.URI)
+		if seen[key] {
+			return fmt.Errorf("duplicate follow record key %q", key)
 		}
-		if a.targets[r.Value.Subject] || j.did == a.owner {
-			records[uri.RecordKey().String()] = r.Value.Subject
+		seen[key] = true
+		if a.targets[subject] || j.did == a.owner {
+			records[key] = subject
 		}
 	}
-	return a.savePage(ctx, j, cursor, page.Cursor, records)
+	var next string
+	if page.Cursor != nil {
+		next = *page.Cursor
+	}
+	return a.savePage(ctx, j, cursor, next, records)
 }
 
 func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor string, records map[string]string) error {
@@ -165,14 +195,6 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 		}
 		if cursor == "" {
 			if err := clearPages(tx, j.did); err != nil {
-				return err
-			}
-		}
-		for key, target := range records {
-			if _, err := tx.Exec("INSERT OR REPLACE INTO edges VALUES(?,?,?)", j.did, key, target); err != nil {
-				return err
-			}
-			if _, err := tx.Exec("INSERT OR REPLACE INTO staged VALUES(?,?,?)", j.did, key, target); err != nil {
 				return err
 			}
 		}
@@ -192,11 +214,21 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 				_, err = tx.Exec("UPDATE scans SET due=unixepoch()+60 WHERE did=?", j.did)
 				return err
 			}
-			if _, err = tx.Exec("INSERT OR REPLACE INTO pages VALUES(?,?,?)", j.did, j.version, nextCursor); err != nil {
+		}
+		for key, target := range records {
+			if _, err := tx.Exec("INSERT OR REPLACE INTO edges VALUES(?,?,?)", j.did, key, target); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("INSERT OR REPLACE INTO staged VALUES(?,?,?)", j.did, key, target); err != nil {
+				return err
+			}
+		}
+		if nextCursor != "" {
+			if _, err := tx.Exec("INSERT OR REPLACE INTO pages VALUES(?,?,?)", j.did, j.version, nextCursor); err != nil {
 				return err
 			}
 			// Yield to untouched and overdue candidates, including after a restart.
-			_, err = tx.Exec("UPDATE scans SET due=unixepoch() WHERE did=?", j.did)
+			_, err := tx.Exec("UPDATE scans SET due=unixepoch() WHERE did=?", j.did)
 			return err
 		}
 		if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND target NOT IN (SELECT target FROM partial_targets WHERE did=?)", j.did, j.did); err != nil {
