@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-
 	"sync"
 	"syscall"
 	"time"
@@ -42,8 +41,27 @@ func (a *cluster) publish(ctx context.Context) error {
 	if _, err = a.ExecContext(ctx, "INSERT OR IGNORE INTO pending VALUES(?,?)", a.id, did); err != nil {
 		return err
 	}
-	if err = a.api.Refresh(ctx); err == nil {
-		err = a.api.Reconcile(ctx, a.store, palustre.Membership{Target: a.id, ListURI: a.list, DID: did, Include: include})
+	if err = a.api.Refresh(ctx); err != nil {
+		return err
+	}
+	check := func(ctx context.Context) error {
+		var eligible, ownerScanning bool
+		err := a.QueryRowContext(ctx, `SELECT ?1<>?2
+		AND NOT EXISTS(SELECT 1 FROM edges WHERE actor=?2 AND target=?1)
+		AND (SELECT count(DISTINCT e.target) FROM edges e JOIN cluster_targets c USING(target)
+		     WHERE c.cluster=?3 AND e.actor=?1)>=?4,
+		    EXISTS(SELECT 1 FROM scans WHERE did=?2)`, did, a.owner, a.id, a.threshold).Scan(&eligible, &ownerScanning)
+		if err != nil {
+			return err
+		}
+		if eligible != include || (include && ownerScanning) {
+			return sql.ErrNoRows
+		}
+		return nil
+	}
+	err = a.api.Reconcile(ctx, a.store, palustre.Membership{Target: a.id, ListURI: a.list, DID: did, Include: include, BeforeWrite: check})
+	if errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
 	if err != nil {
 		_, retryErr := a.ExecContext(ctx, "INSERT OR REPLACE INTO retries VALUES(?,?,unixepoch()+60)", a.id, did)
@@ -58,6 +76,9 @@ func (a *cluster) publish(ctx context.Context) error {
 			return err
 		}
 		if _, err := tx.Exec("DELETE FROM retries WHERE cluster=? AND did=?", a.id, did); err != nil {
+			return err
+		}
+		if _, err := tx.Exec("DELETE FROM audit_wait WHERE cluster=? AND did=?", a.id, did); err != nil {
 			return err
 		}
 		_, err := tx.Exec("DELETE FROM pending WHERE cluster=? AND did=?", a.id, did)
@@ -145,7 +166,16 @@ func run(ctx context.Context) error {
 		})
 	}
 	wg.Go(func() {
+		var nextAudit time.Time
 		for ctx.Err() == nil {
+			if !time.Now().Before(nextAudit) {
+				if err := a.auditMembers(ctx, lists); err != nil {
+					slog.Warn("list-item inventory", "error", err)
+					nextAudit = time.Now().Add(time.Minute)
+				} else {
+					nextAudit = time.Now().Add(a.interval)
+				}
+			}
 			idle := true
 			for _, list := range lists {
 				err := list.publishWithDescription(ctx)
