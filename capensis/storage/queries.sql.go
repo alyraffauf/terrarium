@@ -28,7 +28,7 @@ func (q *Queries) ApplyFollowVersion(ctx context.Context, followApplied int64) e
 }
 
 const bindList = `-- name: BindList :exec
-INSERT INTO targets(pds,list_uri) VALUES(?,?)
+INSERT INTO targets(pds,list_uri) VALUES(?,?) ON CONFLICT(pds) DO NOTHING
 `
 
 type BindListParams struct {
@@ -69,7 +69,7 @@ func (q *Queries) DirtyFollows(ctx context.Context) error {
 }
 
 const enqueueEvent = `-- name: EnqueueEvent :exec
-INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1
+INSERT INTO pending(did,ready) VALUES(?,0) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0
 `
 
 func (q *Queries) EnqueueEvent(ctx context.Context, did string) error {
@@ -125,6 +125,17 @@ func (q *Queries) GetList(ctx context.Context, pds string) (string, error) {
 	var list_uri string
 	err := row.Scan(&list_uri)
 	return list_uri, err
+}
+
+const getListTarget = `-- name: GetListTarget :one
+SELECT pds FROM targets WHERE list_uri=?
+`
+
+func (q *Queries) GetListTarget(ctx context.Context, listUri string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getListTarget, listUri)
+	var pds string
+	err := row.Scan(&pds)
+	return pds, err
 }
 
 const getState = `-- name: GetState :one
@@ -297,7 +308,7 @@ func (q *Queries) ReplaceFollows(ctx context.Context) error {
 }
 
 const resetStream = `-- name: ResetStream :exec
-UPDATE sync_state SET stream_seq=0,stream_endpoint='',cursor_us=?,follow_version=follow_version+1 WHERE id=1
+UPDATE sync_state SET stream_seq=0,stream_endpoint='',cursor_us=?,follow_version=follow_version+1,rescan_requested=1 WHERE id=1
 `
 
 func (q *Queries) ResetStream(ctx context.Context, cursorUs int64) error {

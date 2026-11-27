@@ -9,7 +9,7 @@ UPDATE sync_state SET cursor_us=MAX(cursor_us,CAST(sqlc.arg(cursor_us) AS INTEGE
 -- name: DirtyFollows :exec
 UPDATE sync_state SET follow_version=follow_version+1 WHERE id=1;
 -- name: ResetStream :exec
-UPDATE sync_state SET stream_seq=0,stream_endpoint='',cursor_us=?,follow_version=follow_version+1 WHERE id=1;
+UPDATE sync_state SET stream_seq=0,stream_endpoint='',cursor_us=?,follow_version=follow_version+1,rescan_requested=1 WHERE id=1;
 -- name: RecoverStream :exec
 UPDATE sync_state SET stream_seq=CASE WHEN CAST(sqlc.arg(stream_seq) AS INTEGER)>0 AND (sqlc.arg(stream_endpoint)<>stream_endpoint OR CAST(sqlc.arg(stream_seq) AS INTEGER)>stream_seq) THEN CAST(sqlc.arg(stream_seq) AS INTEGER) ELSE stream_seq END,stream_endpoint=CASE WHEN CAST(sqlc.arg(stream_seq) AS INTEGER)>0 AND (sqlc.arg(stream_endpoint)<>stream_endpoint OR CAST(sqlc.arg(stream_seq) AS INTEGER)>stream_seq) THEN sqlc.arg(stream_endpoint) ELSE stream_endpoint END,invalid_frame=sqlc.arg(invalid_frame),rescan_requested=1,follow_version=follow_version+1 WHERE id=1;
 -- name: TakeRescan :one
@@ -23,9 +23,11 @@ INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?);
 -- name: GetList :one
 SELECT list_uri FROM targets WHERE pds=?;
 -- name: BindList :exec
-INSERT INTO targets(pds,list_uri) VALUES(?,?);
+INSERT INTO targets(pds,list_uri) VALUES(?,?) ON CONFLICT(pds) DO NOTHING;
+-- name: GetListTarget :one
+SELECT pds FROM targets WHERE list_uri=?;
 -- name: EnqueueEvent :exec
-INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1;
+INSERT INTO pending(did,ready) VALUES(?,0) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0;
 -- name: QueueScan :exec
 INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1;
 -- name: QueueMembers :exec

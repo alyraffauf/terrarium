@@ -45,6 +45,20 @@ func TestRescansPreserveQueueAndBackoff(t *testing.T) {
 	if err := db.conn.QueryRow(`SELECT attempts FROM pending WHERE did=?`, first.DID).Scan(&attempts); err != nil || attempts != 1 {
 		t.Fatalf("backoff reset: %d %v", attempts, err)
 	}
+	if err := db.queueScan(ctx, next.DID); err != nil {
+		t.Fatal(err)
+	}
+	// Make the backfill entry older than the live event.
+	if _, err := db.conn.Exec(`UPDATE pending SET ready=1 WHERE did=?`, next.DID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ingest(ctx, first.DID, checkpoint{}, false); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := db.next(ctx)
+	if err != nil || reopened.DID != first.DID || reopened.Attempts != 0 || reopened.Generation <= first.Generation {
+		t.Fatalf("new event did not supersede backoff and backlog: %+v %v", reopened, err)
+	}
 }
 
 func TestBindingsRollbackAndCanonicalMigration(t *testing.T) {
