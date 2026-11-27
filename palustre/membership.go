@@ -210,7 +210,12 @@ func (api *Session) Reconcile(ctx context.Context, db MembershipStore, member Me
 		return err
 	}
 	kept := false
+	seen := make(map[string]bool, len(keys))
 	for _, key := range keys {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		record, err := atproto.RepoGetRecord(ctx, api.Client, "", ItemCollection, api.Client.Auth.Did, key)
 		if err != nil && !XRPCCode(err, "RecordNotFound") {
 			return err
