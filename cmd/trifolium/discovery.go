@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	lex "github.com/bluesky-social/indigo/lex/util"
@@ -13,12 +12,15 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
 type service struct {
 	wakeBackfill    chan struct{}
 	nextDescription time.Time
+	hostMu          sync.Mutex
+	hostReads       map[string]int
 	store
 	api                 *palustre.Session
 	owner, list, stream string
@@ -39,7 +41,8 @@ func (a *service) discover(ctx context.Context, target string, backlinks bool) e
 	seen := map[string]bool{}
 	for {
 		type actor struct {
-			DID string `json:"did"`
+			DID              string `json:"did"`
+			Collection, Rkey string
 		}
 		var page struct {
 			Cursor             string
@@ -52,6 +55,18 @@ func (a *service) discover(ctx context.Context, target string, backlinks bool) e
 			for _, r := range append(page.Followers, page.Records...) {
 				if _, err := syntax.ParseDID(r.DID); err != nil {
 					return err
+				}
+				if backlinks {
+					if r.Collection != "app.bsky.graph.follow" {
+						return errors.New("unexpected backlink collection")
+					}
+					if _, err := syntax.ParseRecordKey(r.Rkey); err != nil {
+						return err
+					}
+					if _, err := tx.Exec("INSERT OR IGNORE INTO hints(did,rkey,target) VALUES(?,?,?)", r.DID, r.Rkey, target); err != nil {
+						return err
+					}
+					continue
 				}
 				if _, err := tx.Exec("INSERT OR IGNORE INTO scans(did) VALUES(?)", r.DID); err != nil {
 					return err
@@ -153,6 +168,9 @@ func (a *service) ingest(ctx context.Context, raw []byte) error {
 			if _, err := syntax.ParseRecordKey(key); err != nil {
 				return palustre.ErrStreamGap
 			}
+			if _, err := tx.Exec("DELETE FROM hints WHERE did=? AND rkey=?", p.DID, key); err != nil {
+				return err
+			}
 			if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND rkey=?", p.DID, key); err != nil {
 				return err
 			}
@@ -174,65 +192,4 @@ func (a *service) ingest(ctx context.Context, raw []byte) error {
 		_, err := tx.Exec("INSERT OR REPLACE INTO cursor VALUES(?,?)", a.stream, p.Seq)
 		return err
 	})
-}
-func (a *service) scan(ctx context.Context) error {
-	var actor string
-	var version int64
-	err := a.QueryRowContext(ctx, "SELECT did,version FROM scans WHERE due<=unixepoch() ORDER BY (did=?) DESC,rowid LIMIT 1", a.owner).Scan(&actor, &version)
-	if err != nil {
-		return err
-	}
-	doc, err := a.api.Resolve(ctx, actor)
-	var follows map[string]string
-	if err == nil {
-		targets := a.targets
-		if actor == a.owner {
-			targets = nil
-		}
-		follows, err = inventory(ctx, &xrpc.Client{Host: doc.PDS, Client: a.http}, actor, targets)
-	}
-	if err != nil {
-		_, retryErr := a.ExecContext(ctx, "UPDATE scans SET due=unixepoch()+60 WHERE did=? AND version=?", actor, version)
-		return errors.Join(fmt.Errorf("inventory %s: %w", actor, err), retryErr)
-	}
-	return a.snapshot(ctx, actor, a.owner, version, follows, a.targets)
-}
-
-// Record keys distinguish duplicate follows and identify the subject of a delete.
-func inventory(ctx context.Context, client *xrpc.Client, actor string, targets map[string]bool) (map[string]string, error) {
-	result := map[string]string{}
-	params := map[string]any{"repo": actor, "collection": "app.bsky.graph.follow", "limit": 100}
-	seen := map[string]bool{}
-	for {
-		var page struct {
-			Cursor  string
-			Records []struct {
-				URI   string
-				Value struct{ Subject string }
-			}
-		}
-		if err := client.LexDo(ctx, lex.Query, "", "com.atproto.repo.listRecords", params, nil, &page); err != nil {
-			return nil, err
-		}
-		for _, record := range page.Records {
-			uri, err := syntax.ParseATURI(record.URI)
-			if err != nil {
-				return nil, err
-			}
-			if uri.Authority().String() != actor || uri.Collection().String() != "app.bsky.graph.follow" || uri.RecordKey() == "" {
-				return nil, fmt.Errorf("unexpected follow URI %s", record.URI)
-			}
-			if targets == nil || targets[record.Value.Subject] {
-				result[uri.RecordKey().String()] = record.Value.Subject
-			}
-		}
-		if page.Cursor == "" {
-			return result, nil
-		}
-		if seen[page.Cursor] {
-			return nil, errors.New("repeated follow inventory cursor")
-		}
-		seen[page.Cursor] = true
-		params["cursor"] = page.Cursor
-	}
 }

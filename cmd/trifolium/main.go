@@ -138,7 +138,11 @@ func run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Go(func() { a.listen(ctx) })
 	wg.Go(func() { a.backfill(ctx) })
-	wg.Go(func() { work(ctx, "follower inventory", a.scan) })
+	for i := range 4 {
+		wg.Go(func() {
+			work(ctx, "follow verification", func(ctx context.Context) error { return a.verify(ctx, i != 0) })
+		})
+	}
 	wg.Go(func() { work(ctx, "list reconciliation", a.publishWithDescription) })
 	wg.Wait()
 	return nil

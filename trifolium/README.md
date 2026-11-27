@@ -15,3 +15,5 @@ Bluesky and Constellation both supply follower candidates. Trifolium reads their
 Jetstream follow creates, updates and deletes change local eligibility. The publisher retries list writes independently, with a default minimum interval of six seconds. Keep the SQLite volume across restarts. A Helm chart in this directory provides a single replica and persistent volume.
 
 Every five minutes the publisher ranks watched accounts by the number of distinct followers who also follow another watched account. The list description names up to three in descending order, breaking ties by DID. Until there is overlap, it reads “Accounts with overlapping follows.”
+
+Four verification workers share the queue, with at most two concurrent verification reads per PDS. Constellation backlinks carry record keys, so workers can verify individual follows directly. Full inventories yield after each page and save their cursor in SQLite. Confirmed follows count immediately; a full inventory removes missing follows only when its final page succeeds.

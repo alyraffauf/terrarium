@@ -69,7 +69,7 @@ func TestTrifoliumAndOwnerFollowChanges(t *testing.T) {
 	}
 	event(actor, "a", "delete", "")
 	check(2, "false")
-	if err = a.snapshot(ctx, actor, owner, 1, map[string]string{"a": first, "b": second}, a.targets); err != nil {
+	if err = a.savePage(ctx, verifyJob{did: actor, version: 1}, "", "", map[string]string{"a": first, "b": second}); err != nil {
 		t.Fatal(err)
 	}
 	check(2, "false")

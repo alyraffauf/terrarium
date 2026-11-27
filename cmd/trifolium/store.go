@@ -18,10 +18,17 @@ CREATE TABLE IF NOT EXISTS watched(target TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS edges(actor TEXT,rkey TEXT,target TEXT,PRIMARY KEY(actor,rkey));
 CREATE INDEX IF NOT EXISTS by_target ON edges(target,actor);
 CREATE TABLE IF NOT EXISTS scans(did TEXT PRIMARY KEY,version INTEGER DEFAULT 1,due INTEGER DEFAULT 0);
+CREATE INDEX IF NOT EXISTS scans_ready ON scans(due);
 CREATE TABLE IF NOT EXISTS items(did TEXT PRIMARY KEY,rkey TEXT UNIQUE);
 CREATE TABLE IF NOT EXISTS published(did TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS pending(did TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS retries(did TEXT PRIMARY KEY,due INTEGER);
+CREATE TABLE IF NOT EXISTS hints(id INTEGER PRIMARY KEY AUTOINCREMENT,did TEXT,rkey TEXT,target TEXT,due INTEGER DEFAULT 0,UNIQUE(did,rkey,target));
+CREATE INDEX IF NOT EXISTS hints_ready ON hints(due,id);
+CREATE TABLE IF NOT EXISTS scanning(did TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS pages(did TEXT PRIMARY KEY,version INTEGER,cursor TEXT);
+CREATE TABLE IF NOT EXISTS page_history(did TEXT,cursor TEXT,PRIMARY KEY(did,cursor));
+CREATE TABLE IF NOT EXISTS staged(actor TEXT,rkey TEXT,target TEXT,PRIMARY KEY(actor,rkey));
 CREATE TABLE IF NOT EXISTS cursor(endpoint TEXT PRIMARY KEY,seq INTEGER);
 CREATE VIEW IF NOT EXISTS counts AS SELECT actor,count(DISTINCT target) AS total FROM edges JOIN watched USING(target)
  WHERE actor NOT IN (SELECT target FROM edges JOIN binding ON edges.actor=binding.owner) AND actor NOT IN (SELECT owner FROM binding) GROUP BY actor;
@@ -50,6 +57,31 @@ func (s store) configure(ctx context.Context, owner string, targets map[string]b
 		if err != nil {
 			return err
 		}
+		rows, err := tx.Query("SELECT target FROM watched")
+		if err != nil {
+			return err
+		}
+		same := true
+		size := 0
+		for rows.Next() {
+			var did string
+			if err := rows.Scan(&did); err != nil {
+				rows.Close()
+				return err
+			}
+			size++
+			same = same && targets[did]
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if !same || size != len(targets) {
+			if _, err = tx.Exec("DELETE FROM pages; DELETE FROM staged; DELETE FROM page_history"); err != nil {
+				return err
+			}
+		}
 		if _, err = tx.Exec("DELETE FROM watched"); err != nil {
 			return err
 		}
@@ -58,7 +90,7 @@ func (s store) configure(ctx context.Context, owner string, targets map[string]b
 				return err
 			}
 		}
-		_, err = tx.Exec(`DELETE FROM edges WHERE actor NOT IN (SELECT owner FROM binding) AND target NOT IN (SELECT target FROM watched);
+		_, err = tx.Exec(`DELETE FROM scanning; DELETE FROM hints WHERE target NOT IN (SELECT target FROM watched); DELETE FROM edges WHERE actor NOT IN (SELECT owner FROM binding) AND target NOT IN (SELECT target FROM watched);
  INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges;
  INSERT OR IGNORE INTO published SELECT did FROM items;`)
 		return err
@@ -79,28 +111,4 @@ func (s store) RememberMember(ctx context.Context, _, did, key string) error {
 func (s store) ForgetMember(ctx context.Context, _, key string) error {
 	_, err := s.ExecContext(ctx, "DELETE FROM items WHERE rkey=?", key)
 	return err
-}
-
-func (s store) snapshot(ctx context.Context, actor, owner string, version int64, follows map[string]string, targets map[string]bool) error {
-	return s.transaction(ctx, func(tx *sql.Tx) error {
-		res, err := tx.Exec("DELETE FROM scans WHERE did=? AND version=?", actor, version)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if n == 0 || err != nil {
-			return err
-		}
-		if _, err = tx.Exec("DELETE FROM edges WHERE actor=?", actor); err != nil {
-			return err
-		}
-		for key, target := range follows {
-			if targets[target] || actor == owner {
-				if _, err = tx.Exec("INSERT INTO edges VALUES(?,?,?)", actor, key, target); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
 }
