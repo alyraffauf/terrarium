@@ -50,8 +50,14 @@ func configureStore(tx *sql.Tx, owner string, targets map[string]bool) error {
 			return err
 		}
 	}
-	_, err = tx.Exec(`DELETE FROM discovery_schedule WHERE target NOT IN (SELECT target FROM watched); DELETE FROM scanning; DELETE FROM staged WHERE actor NOT IN (SELECT owner FROM binding) AND target NOT IN (SELECT target FROM watched); DELETE FROM hints WHERE target NOT IN (SELECT target FROM watched); DELETE FROM edges WHERE actor NOT IN (SELECT owner FROM binding) AND target NOT IN (SELECT target FROM watched);
- `)
+	_, err = tx.Exec(`
+DELETE FROM discovery_schedule WHERE target NOT IN (SELECT target FROM watched);
+DELETE FROM discovery_cursors WHERE target NOT IN (SELECT target FROM watched);
+DELETE FROM scanning;
+DELETE FROM staged WHERE actor NOT IN (SELECT owner FROM binding) AND target NOT IN (SELECT target FROM watched);
+DELETE FROM hints WHERE target NOT IN (SELECT target FROM watched);
+DELETE FROM edges WHERE actor NOT IN (SELECT owner FROM binding) AND target NOT IN (SELECT target FROM watched);
+`)
 	return err
 }
 func (s store) MemberKeys(ctx context.Context, clusterID, did string) ([]string, error) {

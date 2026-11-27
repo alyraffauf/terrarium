@@ -60,7 +60,8 @@ UPDATE scans SET version=version+1,due=0;
 INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges;
 INSERT OR IGNORE INTO scans(did) SELECT DISTINCT did FROM hints;
 DELETE FROM hints;
-UPDATE discovery_schedule SET due=0,generation=generation+1;
+UPDATE discovery_schedule SET due=0,generation=generation+1,cursor='',turn=0,retrying=0;
+DELETE FROM discovery_cursors;
 UPDATE inventory_schedule SET due=0 WHERE id=1;
 `); err != nil {
 		return err

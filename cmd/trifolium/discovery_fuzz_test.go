@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
 )
@@ -97,8 +98,12 @@ func FuzzIndexCandidatesAgainstRepos(f *testing.F) {
 			return reply(200, string(data)), err
 		})}
 		a.api = &palustre.Session{HTTP: a.http, Config: palustre.Config{Slingshot: "https://resolver.invalid"}}
-		for _, backlinks := range []bool{false, true} {
-			requireOK(t, a.discover(t.Context(), target, backlinks))
+		a.interval = time.Hour
+		execute(t, a, "DELETE FROM discovery_schedule WHERE target<>?", target)
+		execute(t, a, "UPDATE inventory_schedule SET due=unixepoch()+3600")
+		for range 4 {
+			_, err := a.backfillStep(t.Context())
+			requireOK(t, err)
 		}
 		if got := pairs(t, a, "SELECT actor,target FROM edges"); len(got) != 0 {
 			t.Fatalf("unverified index entries %v", got)
