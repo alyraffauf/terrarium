@@ -204,7 +204,15 @@ func (a *service) recoverFollowEvent(tx *sql.Tx, event palustre.Event) error {
 func (a *service) applyFollowEvent(tx *sql.Tx, event palustre.Event) error {
 	p := event.Payload
 	if p.Operation == "create" && !a.targets[event.FollowSubject] && p.Did != a.owner {
-		return nil
+		// A newly created key can replace a follow whose delete we missed.
+		// Skip unrelated traffic unless that key or an inventory is known.
+		var tracked bool
+		err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM edges WHERE actor=?1 AND rkey=?2)
+OR EXISTS(SELECT 1 FROM hints WHERE did=?1 AND rkey=?2)
+OR EXISTS(SELECT 1 FROM scans WHERE did=?1)`, p.Did, p.Rkey).Scan(&tracked)
+		if err != nil || !tracked {
+			return err
+		}
 	}
 	if _, err := tx.Exec("DELETE FROM hints WHERE did=? AND rkey=?", p.Did, p.Rkey); err != nil {
 		return err

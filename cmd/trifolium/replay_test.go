@@ -60,6 +60,7 @@ func pairs(t *testing.T, a *service, q string, args ...any) map[string]string {
 }
 
 func FuzzFollowReplay(f *testing.F) {
+	f.Add([]byte{0, 16})
 	f.Add([]byte{1, 4, 64, 192})
 	f.Add([]byte{0, 4, 17, 64, 192, 128, 96, 32, 224})
 	f.Fuzz(func(t *testing.T, history []byte) {
@@ -74,6 +75,9 @@ func FuzzFollowReplay(f *testing.F) {
 			}
 			key := fmt.Sprint((b >> 2) % 4)
 			op := "update"
+			if b&16 != 0 && did != owner {
+				op, subject = "create", "did:example:unwatched"
+			}
 			if b&128 != 0 {
 				op = "delete"
 			}
@@ -85,7 +89,7 @@ func FuzzFollowReplay(f *testing.F) {
 			} else {
 				seq++
 				requireOK(t, a.ingest(t.Context(), frame(seq)))
-				if op == "delete" {
+				if op == "delete" || subject == "did:example:unwatched" {
 					delete(records[did], key)
 				} else {
 					records[did][key] = subject
