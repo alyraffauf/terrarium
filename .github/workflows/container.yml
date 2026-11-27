@@ -67,7 +67,11 @@ jobs:
           nix develop -c ./helix/scripts/generate-db.sh
           nix develop -c ./palustre/microcosm/generate.sh
           nix develop -c ./palustre/jetstream/generate.sh
-          git diff --exit-code -- capensis/storage helix/storage palustre/microcosm palustre/jetstream
+          changes=$(git status --porcelain --untracked-files=all -- capensis/storage helix/storage palustre/microcosm palustre/jetstream)
+          if [ -n "$changes" ]; then
+            printf 'Regenerate and commit these files:\n%s\n' "$changes" >&2
+            exit 1
+          fi
 
   containers:
     needs: [discover, test, nix]
