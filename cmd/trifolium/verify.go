@@ -199,10 +199,10 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 			_, err = tx.Exec("UPDATE scans SET due=unixepoch() WHERE did=?", j.did)
 			return err
 		}
-		if _, err := tx.Exec("DELETE FROM edges WHERE actor=?", j.did); err != nil {
+		if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND target NOT IN (SELECT target FROM partial_targets WHERE did=?)", j.did, j.did); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("INSERT INTO edges SELECT * FROM staged WHERE actor=?", j.did); err != nil {
+		if _, err := tx.Exec("INSERT OR REPLACE INTO edges SELECT * FROM staged WHERE actor=?", j.did); err != nil {
 			return err
 		}
 		if err := clearPages(tx, j.did); err != nil {
@@ -213,7 +213,7 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 	})
 }
 func clearPages(tx *sql.Tx, did string) error {
-	for _, query := range []string{"DELETE FROM staged WHERE actor=?", "DELETE FROM pages WHERE did=?", "DELETE FROM page_history WHERE did=?"} {
+	for _, query := range []string{"DELETE FROM partial_targets WHERE did=?", "DELETE FROM staged WHERE actor=?", "DELETE FROM pages WHERE did=?", "DELETE FROM page_history WHERE did=?"} {
 		if _, err := tx.Exec(query, did); err != nil {
 			return err
 		}

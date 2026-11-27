@@ -24,7 +24,9 @@ func TestExactRecordCannotUndoConcurrentUnfollow(t *testing.T) {
 	const did = "did:example:actor"
 	const target = "did:example:target"
 	a := service{store: store{db}, targets: map[string]bool{target: true}}
-	if err = a.configure(ctx, "did:example:owner", a.targets); err != nil {
+	a.owner = "did:example:owner"
+	accounts := []string{target}
+	if _, err = a.setupClusters(ctx, map[string]clusterConfig{"default": {Accounts: accounts, Threshold: 2}}, 2); err != nil {
 		t.Fatal(err)
 	}
 	deleted := false

@@ -17,3 +17,21 @@ Jetstream follow creates, updates and deletes change local eligibility. The publ
 Every five minutes the publisher ranks watched accounts by the number of distinct followers who also follow another watched account. The list description names up to three in descending order, breaking ties by DID. Until there is overlap, it reads “Accounts with overlapping follows.”
 
 Four verification workers share the queue, with at most two concurrent verification reads per PDS. Constellation backlinks carry record keys, so workers can verify individual follows directly. Full inventories yield after each page and save their cursor in SQLite. Confirmed follows count immediately; a full inventory removes missing follows only when its final page succeeds.
+
+### Multiple clusters
+
+Keep the existing Helm `accounts` and `threshold` values for Mellow Laurel. Add stable cluster IDs alongside them:
+
+```yaml
+clusters:
+  garden:
+    accounts: [one.example, two.example, three.example]
+    threshold: 2
+  orchard:
+    accounts: [two.example, four.example]
+    threshold: 1
+```
+
+The CLI accepts the equivalent JSON object via `--clusters`. Each ID owns one moderation list and its own overlap ranking. Editing a threshold or a target set keeps that list's URI. All clusters share verified follows, owner exclusions, discovery workers and the write interval. Removing a named cluster from configuration pauses management of its list. Reusing its ID resumes it.
+
+On an existing volume, the first multi-list startup migrates Mellow Laurel to the reserved ID `default` in one transaction. Its list URI, list item keys, pending writes, verified follows, queued scans and stream cursor carry forward. The original flags still work. If only new clusters are supplied on upgrade, Trifolium retains the existing watched accounts as the default cluster and uses `--threshold` (2 by default). For a legacy installation with a custom threshold, keep supplying it on that first upgrade. Subsequent starts retain the saved default threshold.

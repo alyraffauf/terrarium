@@ -23,7 +23,9 @@ func TestTrifoliumAndOwnerFollowChanges(t *testing.T) {
 	const first = "did:example:first"
 	const second = "did:example:second"
 	a := service{store: store{db}, owner: owner, targets: map[string]bool{first: true, second: true}}
-	if err = a.configure(ctx, owner, a.targets); err != nil {
+	a.owner = "did:example:owner"
+	accounts := []string{first, second}
+	if _, err = a.setupClusters(ctx, map[string]clusterConfig{"default": {Accounts: accounts, Threshold: 2}}, 2); err != nil {
 		t.Fatal(err)
 	}
 	seq := 0
@@ -39,7 +41,7 @@ func TestTrifoliumAndOwnerFollowChanges(t *testing.T) {
 		t.Helper()
 		var did string
 		var include bool
-		err := db.QueryRow(nextChange, threshold, owner).Scan(&did, &include)
+		err := db.QueryRow(nextChange, defaultCluster, threshold, owner).Scan(&did, &include)
 		if errors.Is(err, sql.ErrNoRows) && want == "none" {
 			return
 		}
@@ -54,7 +56,7 @@ func TestTrifoliumAndOwnerFollowChanges(t *testing.T) {
 	event(actor, "b", "create", second)
 	check(2, "true")
 	check(3, "none")
-	if _, err = db.Exec("INSERT INTO published VALUES(?)", actor); err != nil {
+	if _, err = db.Exec("INSERT INTO published VALUES('default',?)", actor); err != nil {
 		t.Fatal(err)
 	}
 	check(3, "false")

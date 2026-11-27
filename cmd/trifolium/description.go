@@ -12,7 +12,7 @@ import (
 
 const oldDescription = "Accounts meeting the configured follower crossover threshold."
 const ranking = `
- WITH follows AS (SELECT DISTINCT actor,target FROM edges JOIN watched USING(target)),
+ WITH follows AS (SELECT DISTINCT actor,target FROM edges JOIN cluster_targets USING(target) WHERE cluster=?),
  shared AS (SELECT actor FROM follows GROUP BY actor HAVING count(*)>1)
  SELECT target FROM follows JOIN shared USING(actor)
  GROUP BY target ORDER BY count(*) DESC,target LIMIT 3`
@@ -36,8 +36,8 @@ func clusterDescription(handles []string) string {
 	}
 	return "Accounts with overlapping follows."
 }
-func (a *service) refreshDescription(ctx context.Context) error {
-	rows, err := a.QueryContext(ctx, ranking)
+func (a *cluster) refreshDescription(ctx context.Context) error {
+	rows, err := a.QueryContext(ctx, ranking, a.id)
 	if err != nil {
 		return err
 	}
@@ -79,11 +79,11 @@ func (a *service) refreshDescription(ctx context.Context) error {
 	}
 	description := clusterDescription(handles)
 	// Remember attempted texts before writing so a lost response is safe to retry.
-	if _, err = a.ExecContext(ctx, "INSERT OR IGNORE INTO descriptions VALUES(?)", description); err != nil {
+	if _, err = a.ExecContext(ctx, "INSERT OR IGNORE INTO descriptions VALUES(?,?)", a.id, description); err != nil {
 		return err
 	}
 	previous := []string{oldDescription}
-	rows, err = a.QueryContext(ctx, "SELECT text FROM descriptions")
+	rows, err = a.QueryContext(ctx, "SELECT text FROM descriptions WHERE cluster=?", a.id)
 	if err != nil {
 		return err
 	}
@@ -106,15 +106,16 @@ func (a *service) refreshDescription(ctx context.Context) error {
 	if err = a.api.EnsureList(ctx, a.list, description, previous...); err != nil {
 		return fmt.Errorf("update cluster description: %w", err)
 	}
-	_, err = a.ExecContext(ctx, "DELETE FROM descriptions WHERE text<>?", description)
+	_, err = a.ExecContext(ctx, "DELETE FROM descriptions WHERE cluster=? AND text<>?", a.id, description)
 	return err
 }
-func (a *service) publishWithDescription(ctx context.Context) error {
+func (a *cluster) publishWithDescription(ctx context.Context) error {
 	if !time.Now().Before(a.nextDescription) {
-		a.nextDescription = time.Now().Add(5 * time.Minute)
+
 		if err := a.refreshDescription(ctx); err != nil {
 			return err
 		}
+		a.nextDescription = time.Now().Add(5 * time.Minute)
 	}
 	return a.publish(ctx)
 }

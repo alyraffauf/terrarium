@@ -17,17 +17,17 @@ import (
 )
 
 type service struct {
-	wakeBackfill    chan struct{}
-	nextDescription time.Time
-	hostMu          sync.Mutex
-	hostReads       map[string]int
+	wakeBackfill chan struct{}
+
+	hostMu    sync.Mutex
+	hostReads map[string]int
 	store
-	api                 *palustre.Session
-	owner, list, stream string
-	targets             map[string]bool
-	threshold           int
-	interval            time.Duration
-	http                *http.Client
+	api           *palustre.Session
+	owner, stream string
+	targets       map[string]bool
+
+	interval time.Duration
+	http     *http.Client
 }
 
 func (a *service) discover(ctx context.Context, target string, backlinks bool) error {
@@ -91,18 +91,35 @@ func (a *service) discover(ctx context.Context, target string, backlinks bool) e
 const dirty = `INSERT INTO scans(did) VALUES(?) ON CONFLICT(did) DO UPDATE SET version=version+1,due=0`
 
 func (a *service) backfill(ctx context.Context) {
+	initial := true
 	for ctx.Err() == nil {
-		_, err := a.ExecContext(ctx, "INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges")
-		if err != nil {
-			slog.Error("schedule inventory", "error", err)
+		if !initial {
+			if _, err := a.ExecContext(ctx, "INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges"); err != nil {
+				slog.Error("schedule inventory", "error", err)
+			}
 		}
 		for target := range a.targets {
+			if initial {
+				var discovered bool
+				err := a.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM discovered WHERE target=?)", target).Scan(&discovered)
+				if err == nil && discovered {
+					continue
+				}
+			}
+			complete := true
 			for _, backlinks := range []bool{false, true} {
 				if err := a.discover(ctx, target, backlinks); err != nil {
+					complete = false
 					slog.Warn("follower discovery", "target", target, "constellation", backlinks, "error", err)
 				}
 			}
+			if complete {
+				if _, err := a.ExecContext(ctx, "INSERT OR IGNORE INTO discovered VALUES(?)", target); err != nil {
+					slog.Warn("save discovery progress", "error", err)
+				}
+			}
 		}
+		initial = false
 		select {
 		case <-ctx.Done():
 			return
