@@ -15,7 +15,7 @@ func TestTrifoliumAndOwnerFollowChanges(t *testing.T) {
 	}
 	db.SetMaxOpenConns(1)
 	defer db.Close()
-	if _, err = db.Exec(schema); err != nil {
+	if err = (store{db}).initialize(ctx); err != nil {
 		t.Fatal(err)
 	}
 	const owner = "did:example:owner"
@@ -32,7 +32,7 @@ func TestTrifoliumAndOwnerFollowChanges(t *testing.T) {
 	event := func(did, key, op, target string) {
 		t.Helper()
 		seq++
-		raw := fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","seq":%d,"collection":"app.bsky.graph.follow","did":%q,"rkey":%q,"operation":%q,"record":{"subject":%q}}}`, seq, did, key, op, target)
+		raw := fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","seq":%d,"time":"2026-01-01T00:00:00Z","collection":"app.bsky.graph.follow","did":%q,"rkey":%q,"operation":%q,"record":{"$type":"app.bsky.graph.follow","subject":%q}}}`, seq, did, key, op, target)
 		if err := a.ingest(ctx, []byte(raw)); err != nil {
 			t.Fatal(err)
 		}
@@ -60,10 +60,23 @@ func TestTrifoliumAndOwnerFollowChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(3, "false")
+	if _, err = db.Exec(dirty, owner); err != nil {
+		t.Fatal(err)
+	}
 	event(owner, "exclusion", "create", actor)
 	check(2, "false")
 	event(owner, "exclusion", "delete", "")
 	check(2, "none")
+	if _, err = db.Exec("DELETE FROM published WHERE cluster='default' AND did=?", actor); err != nil {
+		t.Fatal(err)
+	}
+	check(2, "none")
+	if _, err = db.Exec("DELETE FROM scans WHERE did=?", owner); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec("INSERT INTO published VALUES('default',?)", actor); err != nil {
+		t.Fatal(err)
+	}
 	event(actor, "duplicate", "delete", "")
 	check(2, "none")
 	if _, err = db.Exec(dirty, actor); err != nil {

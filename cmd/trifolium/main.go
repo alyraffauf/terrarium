@@ -28,7 +28,8 @@ const nextChange = `
  UNION ALL SELECT did FROM pending WHERE cluster=?1)
  SELECT did,did IN (SELECT did FROM eligible) AS include FROM changes
  WHERE did NOT IN (SELECT did FROM retries WHERE cluster=?1 AND due>unixepoch())
- AND NOT EXISTS (SELECT 1 FROM scans WHERE did=?3)
+ AND (did NOT IN (SELECT did FROM eligible) OR NOT EXISTS (SELECT 1 FROM scans WHERE did=?3))
+ AND NOT EXISTS (SELECT 1 FROM audit_wait w JOIN scans s ON s.did=w.did WHERE w.cluster=?1 AND w.did=changes.did)
  ORDER BY include,did LIMIT 1`
 
 func (a *cluster) publish(ctx context.Context) error {
@@ -74,9 +75,9 @@ func work(ctx context.Context, name string, next func(context.Context) error) {
 	}
 }
 func run(ctx context.Context) error {
-	rawClusters := flag.String("clusters", "", "JSON object of named clusters, each with accounts and threshold")
-	accounts := flag.String("accounts", "", "comma-separated watched handles or DIDs")
-	threshold := flag.Int("threshold", 2, "minimum distinct watched accounts followed")
+	rawClusters := flag.String("clusters", "", `clusters by ID, e.g. {"garden":{"accounts":["a.example"],"threshold":1}}`)
+	accounts := flag.String("accounts", "", "watched handles or DIDs for the default cluster, separated by commas")
+	threshold := flag.Int("threshold", 2, "minimum distinct watched accounts followed for the default cluster")
 	interval := flag.Duration("rescan-interval", 24*time.Hour, "interval between full discovery passes")
 	path := flag.String("database", "trifolium.sqlite", "SQLite state file")
 	endpoint := flag.String("jetstream", "wss://jetstream.waow.tech", "Jetstream v2 endpoint")
@@ -86,14 +87,18 @@ func run(ctx context.Context) error {
 	flag.Parse()
 	password := os.Getenv("TRIFOLIUM_APP_PASSWORD")
 	if *threshold < 1 || *interval <= 0 || *pace <= 0 || *identifier == "" || password == "" {
-		return errors.New("set accounts, identifier, TRIFOLIUM_APP_PASSWORD, and positive threshold and intervals")
+		return errors.New("set identifier and TRIFOLIUM_APP_PASSWORD and use positive threshold and intervals")
 	}
 	stream, err := palustre.NormalizeJetstream(*endpoint)
 	if err != nil {
 		return err
 	}
+	resolver, err := palustre.NormalizePDS(*slingshot)
+	if err != nil {
+		return err
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	api := &palustre.Session{HTTP: client, Config: palustre.Config{Identifier: *identifier, Password: password, Slingshot: *slingshot, WriteInterval: *pace}}
+	api := &palustre.Session{HTTP: client, Config: palustre.Config{Identifier: *identifier, Password: password, Slingshot: resolver, WriteInterval: *pace}}
 	configs, err := parseClusters(*rawClusters, *accounts, *threshold)
 	if err != nil {
 		return err
@@ -113,7 +118,7 @@ func run(ctx context.Context) error {
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
-	if _, err = db.ExecContext(ctx, schema); err != nil {
+	if err = (store{db}).initialize(ctx); err != nil {
 		return err
 	}
 	if err = api.Login(ctx); err != nil {
@@ -125,7 +130,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err = db.ExecContext(ctx, dirty, owner); err != nil {
+	if err = a.prepareStream(ctx); err != nil {
 		return err
 	}
 	for _, list := range lists {

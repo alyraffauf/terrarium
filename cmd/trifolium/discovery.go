@@ -3,17 +3,17 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"github.com/alyraffauf/terrarium/palustre"
-	"github.com/bluesky-social/indigo/atproto/syntax"
-	lex "github.com/bluesky-social/indigo/lex/util"
-	"github.com/bluesky-social/indigo/xrpc"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/alyraffauf/terrarium/palustre"
+	"github.com/alyraffauf/terrarium/palustre/microcosm"
+	"github.com/bluesky-social/indigo/api/bsky"
+	"github.com/bluesky-social/indigo/atproto/syntax"
+	"github.com/bluesky-social/indigo/xrpc"
 )
 
 type service struct {
@@ -30,183 +30,161 @@ type service struct {
 	http     *http.Client
 }
 
+type backlink struct {
+	DID, Collection, Rkey string
+}
+
 func (a *service) discover(ctx context.Context, target string, backlinks bool) error {
-	host, method := "https://public.api.bsky.app", "app.bsky.graph.getFollowers"
-	params := map[string]any{"actor": target, "limit": 100}
-	if backlinks {
-		host, method = "https://constellation.microcosm.blue", "blue.microcosm.links.getBacklinks"
-		params = map[string]any{"subject": target, "source": "app.bsky.graph.follow:subject", "limit": 100}
-	}
-	client := &xrpc.Client{Host: host, Client: a.http}
+	cursor := ""
 	seen := map[string]bool{}
 	for {
-		type actor struct {
-			DID              string `json:"did"`
-			Collection, Rkey string
-		}
-		var page struct {
-			Cursor             string
-			Followers, Records []actor
-		}
-		if err := client.LexDo(ctx, lex.Query, "", method, params, nil, &page); err != nil {
+		next, err := a.discoverPage(ctx, target, backlinks, cursor)
+		if err != nil || next == "" {
 			return err
 		}
-		err := a.transaction(ctx, func(tx *sql.Tx) error {
-			for _, r := range append(page.Followers, page.Records...) {
-				if _, err := syntax.ParseDID(r.DID); err != nil {
-					return err
-				}
-				if backlinks {
-					if r.Collection != "app.bsky.graph.follow" {
-						return errors.New("unexpected backlink collection")
-					}
-					if _, err := syntax.ParseRecordKey(r.Rkey); err != nil {
-						return err
-					}
-					if _, err := tx.Exec("INSERT OR IGNORE INTO hints(did,rkey,target) VALUES(?,?,?)", r.DID, r.Rkey, target); err != nil {
-						return err
-					}
-					continue
-				}
-				if _, err := tx.Exec("INSERT OR IGNORE INTO scans(did) VALUES(?)", r.DID); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			return err
+		if seen[next] {
+			return errors.New("repeated discovery cursor")
 		}
-		if page.Cursor == "" {
-			return nil
-		}
-		if seen[page.Cursor] {
-			return errors.New("repeated backfill cursor")
-		}
-		seen[page.Cursor] = true
-		params["cursor"] = page.Cursor
+		seen[next] = true
+		cursor = next
 	}
+}
+
+func (a *service) discoverPage(ctx context.Context, target string, backlinks bool, cursor string) (string, error) {
+	var next string
+	var records []backlink
+	if backlinks {
+		client := &xrpc.Client{Host: "https://constellation.microcosm.blue", Client: a.http}
+		page, err := microcosm.LinksGetBacklinks(ctx, client, cursor, nil, 100, followCollection+":subject", target)
+		if err != nil {
+			return "", err
+		}
+		if page.Records == nil {
+			return "", errors.New("backlink response has no records array")
+		}
+		if page.Cursor != nil {
+			next = *page.Cursor
+		}
+		for _, record := range page.Records {
+			if record == nil {
+				return "", errors.New("backlink response contains a null record")
+			}
+			records = append(records, backlink{DID: record.Did, Collection: record.Collection, Rkey: record.Rkey})
+		}
+	} else {
+		client := &xrpc.Client{Host: "https://public.api.bsky.app", Client: a.http}
+		page, err := bsky.GraphGetFollowers(ctx, client, target, cursor, 100, "")
+		if err != nil {
+			return "", err
+		}
+		if page.Subject == nil || page.Subject.Did != target {
+			return "", errors.New("follower response has unexpected subject")
+		}
+		if page.Followers == nil {
+			return "", errors.New("follower response has no followers array")
+		}
+		if page.Cursor != nil {
+			next = *page.Cursor
+		}
+		for _, follower := range page.Followers {
+			if follower == nil {
+				return "", errors.New("follower response contains a null profile")
+			}
+			records = append(records, backlink{DID: follower.Did})
+		}
+	}
+	err := a.transaction(ctx, func(tx *sql.Tx) error {
+		for _, record := range records {
+			if _, err := syntax.ParseDID(record.DID); err != nil {
+				return err
+			}
+			if !backlinks {
+				if _, err := tx.Exec("INSERT OR IGNORE INTO scans(did) VALUES(?)", record.DID); err != nil {
+					return err
+				}
+				continue
+			}
+			if record.Collection != followCollection {
+				return errors.New("unexpected backlink collection")
+			}
+			if _, err := syntax.ParseRecordKey(record.Rkey); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("INSERT OR IGNORE INTO hints(did,rkey,target) VALUES(?,?,?)", record.DID, record.Rkey, target); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return next, err
 }
 
 const dirty = `INSERT INTO scans(did) VALUES(?) ON CONFLICT(did) DO UPDATE SET version=version+1,due=0`
 
 func (a *service) backfill(ctx context.Context) {
-	initial := true
 	for ctx.Err() == nil {
-		if !initial {
-			if _, err := a.ExecContext(ctx, "INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges"); err != nil {
-				slog.Error("schedule inventory", "error", err)
+		delay, err := a.backfillStep(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
 			}
+			slog.Warn("schedule follower discovery", "error", err)
+			delay = time.Second
 		}
-		for target := range a.targets {
-			if initial {
-				var discovered bool
-				err := a.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM discovered WHERE target=?)", target).Scan(&discovered)
-				if err == nil && discovered {
-					continue
-				}
-			}
-			complete := true
-			for _, backlinks := range []bool{false, true} {
-				if err := a.discover(ctx, target, backlinks); err != nil {
-					complete = false
-					slog.Warn("follower discovery", "target", target, "constellation", backlinks, "error", err)
-				}
-			}
-			if complete {
-				if _, err := a.ExecContext(ctx, "INSERT OR IGNORE INTO discovered VALUES(?)", target); err != nil {
-					slog.Warn("save discovery progress", "error", err)
-				}
-			}
+		if delay <= 0 {
+			continue
 		}
-		initial = false
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-			return
-		case <-time.After(a.interval):
+		case <-timer.C:
 		case <-a.wakeBackfill:
 		}
-	}
-}
-func (a *service) listen(ctx context.Context) {
-	for ctx.Err() == nil {
-		var seq int64
-		err := a.QueryRowContext(ctx, "SELECT coalesce(max(seq),0) FROM cursor WHERE endpoint=?", a.stream).Scan(&seq)
-		if err == nil {
-			if seq == 0 {
-				seq = time.Now().Add(-time.Minute).UnixMicro()
-			}
-			err = palustre.Stream(ctx, a.stream, seq, func(raw []byte) error { return a.ingest(ctx, raw) })
-		}
-		if errors.Is(err, palustre.ErrStreamGap) {
-			_, err = a.ExecContext(ctx, "DELETE FROM cursor; UPDATE scans SET version=version+1; INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges;")
-			if err == nil {
-				_, err = a.ExecContext(ctx, dirty, a.owner)
-				select {
-				case a.wakeBackfill <- struct{}{}:
-				default:
-				}
-			}
-		}
-		slog.Warn("reconnecting Jetstream", "error", err)
-		palustre.Pause(ctx, 2*time.Second)
+		timer.Stop()
 	}
 }
 
-func (a *service) ingest(ctx context.Context, raw []byte) error {
-	var f palustre.Frame
-	if err := json.Unmarshal(raw, &f); err != nil {
-		return palustre.ErrStreamGap
-	}
-	p := f.Payload
-	if f.Type == "error" || p.Name == "OutdatedCursor" || p.Name == "FutureCursor" {
-		return palustre.ErrStreamGap
-	}
-	if p.Seq <= 0 {
-		return nil
-	}
-	kind := strings.TrimPrefix(p.Type, palustre.EventPrefix)
-	var subject struct{ Subject string }
-	if kind == "commit" && p.Collection == "app.bsky.graph.follow" && p.Operation != "delete" {
-		if err := json.Unmarshal(p.Record, &subject); err != nil {
-			return palustre.ErrStreamGap
-		}
-	}
-	// Unrelated creates cannot overwrite a previous record. Replaying them is harmless.
-	if kind == "commit" && p.Operation == "create" && !a.targets[subject.Subject] && p.DID != a.owner {
-		return nil
-	}
-	if kind != "sync" && !(kind == "commit" && p.Collection == "app.bsky.graph.follow") {
-		return nil
-	}
-	return a.transaction(ctx, func(tx *sql.Tx) error {
-		if kind == "commit" {
-			key := p.Rkey
-			if _, err := syntax.ParseRecordKey(key); err != nil {
-				return palustre.ErrStreamGap
-			}
-			if _, err := tx.Exec("DELETE FROM hints WHERE did=? AND rkey=?", p.DID, key); err != nil {
-				return err
-			}
-			if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND rkey=?", p.DID, key); err != nil {
-				return err
-			}
-			if p.Operation != "delete" && (a.targets[subject.Subject] || p.DID == a.owner) {
-				if _, err := syntax.ParseDID(subject.Subject); err != nil {
-					return palustre.ErrStreamGap
-				}
-				if _, err := tx.Exec("INSERT INTO edges VALUES(?,?,?)", p.DID, key, subject.Subject); err != nil {
-					return err
-				}
-			}
-			// Invalidate any inventory started before this record changed.
-			if _, err := tx.Exec("UPDATE scans SET version=version+1,due=0 WHERE did=?", p.DID); err != nil {
-				return err
-			}
-		} else if _, err := tx.Exec(dirty, p.DID); err != nil {
+func (a *service) backfillStep(ctx context.Context) (time.Duration, error) {
+	now := time.Now()
+	nextInventory := now.Add(max(a.interval, time.Second)).Unix()
+	err := a.transaction(ctx, func(tx *sql.Tx) error {
+		res, err := tx.Exec("UPDATE inventory_schedule SET due=? WHERE id=1 AND due<=?", nextInventory, now.Unix())
+		if err != nil {
 			return err
 		}
-		_, err := tx.Exec("INSERT OR REPLACE INTO cursor VALUES(?,?)", a.stream, p.Seq)
+		changed, err := res.RowsAffected()
+		if err != nil || changed == 0 {
+			return err
+		}
+		if _, err := tx.Exec("INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges"); err != nil {
+			return err
+		}
+		_, err = tx.Exec("INSERT OR IGNORE INTO scans(did) VALUES(?)", a.owner)
 		return err
 	})
+	if err != nil {
+		return 0, err
+	}
+
+	var target string
+	var backlinks bool
+	var due, generation int64
+	err = a.QueryRowContext(ctx, `SELECT target,backlinks,due,generation FROM discovery_schedule ORDER BY due,target,backlinks LIMIT 1`).Scan(&target, &backlinks, &due, &generation)
+	if err != nil {
+		return 0, err
+	}
+	if due > now.Unix() {
+		if err := a.QueryRowContext(ctx, "SELECT due FROM inventory_schedule WHERE id=1").Scan(&nextInventory); err != nil {
+			return 0, err
+		}
+		return time.Until(time.Unix(min(due, nextInventory), 0)), nil
+	}
+	interval := a.interval
+	if err := a.discover(ctx, target, backlinks); err != nil {
+		slog.Warn("follower discovery", "target", target, "constellation", backlinks, "error", err)
+		interval = time.Minute
+	}
+	_, err = a.ExecContext(ctx, `UPDATE discovery_schedule SET due=? WHERE target=? AND backlinks=? AND generation=?`,
+		time.Now().Add(max(interval, time.Second)).Unix(), target, backlinks, generation)
+	return 0, err
 }

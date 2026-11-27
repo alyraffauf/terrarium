@@ -240,6 +240,9 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 		if err := clearPages(tx, j.did); err != nil {
 			return err
 		}
+		if _, err := tx.Exec("DELETE FROM audit_wait WHERE did=?", j.did); err != nil {
+			return err
+		}
 		_, err := tx.Exec("DELETE FROM scans WHERE did=?", j.did)
 		return err
 	})
