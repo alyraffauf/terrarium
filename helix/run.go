@@ -148,7 +148,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 }
 
 func rescanLoop(ctx context.Context, targets []*listTarget, db *store, rescan <-chan struct{}) {
-	next := make([]time.Time, len(targets))
+	next := make([]time.Time, 2*len(targets))
 	for ctx.Err() == nil {
 		scanDue(ctx, targets, db, next, time.Now())
 		deadline := next[0]
@@ -314,7 +314,14 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.Time, now time.Time) {
 	var scans sync.WaitGroup
 	slots := make(chan struct{}, 4)
-	for i, api := range targets {
+	for i := range next {
+		api := targets[i/2]
+		scan := api.backfill
+		source := "AppView"
+		if i%2 == 1 {
+			scan = api.backfillLinks
+			source = "Constellation"
+		}
 		if api.suspended.Load() {
 			next[i] = now.Add(time.Minute)
 			continue
@@ -333,11 +340,11 @@ func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.
 			defer scans.Done()
 			defer func() { <-slots }()
 			delay := api.rescanInterval
-			if err := api.backfill(ctx, db); err != nil {
-				slog.Error("Follower backfill failed", "account", api.actor, "error", err)
+			if err := scan(ctx, db); err != nil {
+				slog.Error("Follower backfill failed", "source", source, "account", api.actor, "error", err)
 				delay = time.Minute
 			} else {
-				slog.Info("Follower backfill queued", "account", api.actor)
+				slog.Info("Follower backfill queued", "source", source, "account", api.actor)
 			}
 			next[i] = time.Now().Add(delay)
 		}()

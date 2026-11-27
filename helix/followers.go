@@ -94,3 +94,18 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 	subject.follows, err = palustre.FetchTargetFollows(ctx, client, did, watched)
 	return subject, err
 }
+
+func (api *listTarget) backfillLinks(ctx context.Context, db *store) error {
+	client := &xrpc.Client{Host: api.cfg.Constellation, Client: api.HTTP}
+	return palustre.WalkPages(func(cursor string) (*string, error) {
+		rows, next, err := palustre.BacklinksPage(ctx, client, api.actor, "app.bsky.graph.follow", "subject", cursor)
+		if err != nil {
+			return nil, err
+		}
+		dids := make([]string, 0, len(rows))
+		for _, r := range rows {
+			dids = append(dids, r.Did)
+		}
+		return next, db.queueScan(ctx, dids...)
+	})
+}

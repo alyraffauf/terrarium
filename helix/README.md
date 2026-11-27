@@ -42,9 +42,9 @@ An existing list must belong to the owner, have the managed title and descriptio
 
 ## Membership updates
 
-Helix backfills followers from the AppView at startup and every `--rescan-interval`, which defaults to six hours. Jetstream follow and unfollow events trigger checks against candidates' current PDSes. Account events recheck known candidates. Accounts confirmed inactive leave the lists.
+Helix backfills followers from AppView and Constellation at startup and every `--rescan-interval`, which defaults to six hours. Jetstream follow and unfollow events trigger checks against candidates' current PDSes. Account events recheck known candidates. Accounts confirmed inactive leave the lists.
 
-Owner follow and unfollow events refresh exclusions, with a five-minute fallback. Failed exclusion fetches pause membership changes until a complete snapshot succeeds. Restarts resume the saved stream cursor. A stream gap triggers a new backfill. Backfill coverage depends on the AppView's follower index.
+Owner follow and unfollow events refresh exclusions, with a five-minute fallback. Failed exclusion fetches pause membership changes until a complete snapshot succeeds. Restarts resume the saved stream cursor. A stream gap triggers a new backfill. Each index has its own retry schedule. Set `--constellation` to override the backlink endpoint.
 
 Helix checks up to eight accounts concurrently and stops reading a candidate's follows once all target accounts are found. List writes remain serialized. Once a minute, `membership progress` logs the pending count and process totals for completed checks, additions, removals, and retries. Pending includes in-flight checks and delayed retries.
 

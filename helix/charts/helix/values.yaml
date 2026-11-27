@@ -9,6 +9,7 @@ lists: {}
 existingSecret: ""
 passwordKey: app-password
 appview: https://public.api.bsky.app
+constellation: https://constellation.microcosm.blue
 slingshot: https://slingshot.aly.town
 jetstream: https://jetstream.waow.tech
 loginPDS: ""

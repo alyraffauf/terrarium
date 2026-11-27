@@ -12,11 +12,11 @@ import (
 )
 
 type Config struct {
-	MetricsAddress                                                          string
-	AppView, Identifier, Password, LoginPDS, Slingshot, Jetstream, Database string
-	Targets                                                                 []Target
-	WriteInterval                                                           time.Duration
-	RescanInterval                                                          time.Duration
+	MetricsAddress                                                                         string
+	Constellation, AppView, Identifier, Password, LoginPDS, Slingshot, Jetstream, Database string
+	Targets                                                                                []Target
+	WriteInterval                                                                          time.Duration
+	RescanInterval                                                                         time.Duration
 }
 
 type Target struct {
@@ -95,6 +95,13 @@ func (cfg *Config) validate() error {
 
 	}
 	cfg.AppView, err = normalizePDS(cfg.AppView)
+	if err != nil {
+		return err
+	}
+	if cfg.Constellation == "" {
+		cfg.Constellation = palustre.DefaultConstellation
+	}
+	cfg.Constellation, err = normalizePDS(cfg.Constellation)
 	if err != nil {
 		return err
 	}

@@ -57,7 +57,7 @@ func command() *cobra.Command {
 				Targets:       targets, Identifier: config.GetString("identifier"),
 				Password: config.GetString("app-password"), LoginPDS: config.GetString("login-pds"),
 				Slingshot: config.GetString("slingshot"), Jetstream: config.GetString("jetstream"),
-				AppView: config.GetString("appview"), MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: intervals.Rescan,
+				Constellation: config.GetString("constellation"), AppView: config.GetString("appview"), MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: intervals.Rescan,
 			}
 			return helix.Run(cmd.Context(), cfg)
 		},
@@ -69,6 +69,7 @@ func command() *cobra.Command {
 	flags.String("identifier", "", "List owner's handle or DID")
 	flags.String("app-password", "", "List owner's app password")
 	flags.String("login-pds", "", "List owner's PDS URL (default: resolve with Slingshot)")
+	flags.String("constellation", palustre.DefaultConstellation, "Constellation backlink index URL")
 	flags.String("appview", "https://public.api.bsky.app", "AppView URL for followers and profiles")
 	flags.String("slingshot", "https://slingshot.aly.town", "Slingshot base URL")
 	flags.String("jetstream", "wss://jetstream.waow.tech", "Jetstream v2 base URL or subscribeEvents URL")
