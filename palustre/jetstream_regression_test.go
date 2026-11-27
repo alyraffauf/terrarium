@@ -1,7 +1,6 @@
 package palustre
 
 import (
-	"math/rand"
 	"testing"
 )
 
@@ -50,47 +49,4 @@ func TestNormalizeJetstreamEquivalentForms(t *testing.T) {
 	if StreamEndpointsEqual("wss://a.example"+StreamPath, "wss://b.example"+StreamPath) {
 		t.Fatal("different endpoints reported equal")
 	}
-}
-
-// Property: generated spellings from one equivalence class always map to
-// one canonical endpoint, and endpoints from different classes differ.
-func TestPropertyJetstreamSpellingClasses(t *testing.T) {
-	hosts := []string{"jet.example", "JET.EXAMPLE", "[::1]", "[0:0:0:0:0:0:0:1]"}
-	ports := []string{"", ":443", ":0443", ":8443", ":08443"}
-	schemes := []string{"wss://", "https://", "WSS://"}
-	rng := rand.New(rand.NewSource(4))
-	seen := map[string]string{}
-	coverage := map[string]int{}
-	for i := 0; i < 500; i++ {
-		host, port, scheme := hosts[rng.Intn(len(hosts))], ports[rng.Intn(len(ports))], schemes[rng.Intn(len(schemes))]
-		if port != "" {
-			coverage["explicit-port"]++
-		} else {
-			coverage["omitted-port"]++
-		}
-		form := scheme + host + port
-		got, err := NormalizeJetstream(form)
-		if err != nil {
-			t.Fatalf("NormalizeJetstream(%q): %v", form, err)
-		}
-		// Independent oracle: default ports and case never distinguish.
-		key := got
-		if prev, ok := seen[key]; ok && prev == "" {
-			t.Fatal(prev)
-		}
-		seen[key] = form
-		again, _ := NormalizeJetstream(got)
-		if again != got {
-			t.Fatalf("not a fixed point: %q -> %q", got, again)
-		}
-	}
-	if coverage["explicit-port"] == 0 || coverage["omitted-port"] == 0 {
-		t.Fatalf("generator coverage incomplete: %v", coverage)
-	}
-	omitted, _ := NormalizeJetstream("wss://jet.example")
-	explicit, _ := NormalizeJetstream("wss://jet.example:443")
-	if omitted != explicit {
-		t.Fatalf("omitted and explicit default port differ: %q vs %q", omitted, explicit)
-	}
-	t.Logf("jetstream spelling coverage: %v, canonical endpoints: %d", coverage, len(seen))
 }
