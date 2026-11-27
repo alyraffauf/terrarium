@@ -152,34 +152,20 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	page, err := atproto.RepoListRecords(ctx, c, followCollection, cursor, 100, j.did, false)
-	if err != nil {
-		return err
-	}
-	if page.Records == nil {
-		return errors.New("follow inventory has no records array")
-	}
 	seen := map[string]bool{}
 	records := map[string]string{}
-	for _, record := range page.Records {
-		if record == nil {
-			return errors.New("follow inventory contains a null record")
-		}
-		key, subject, err := parseFollow(j.did, record.Uri, record.Value)
-		if err != nil {
-			return err
-		}
+	next, err := palustre.ListFollowPage(ctx, c, j.did, cursor, func(key, subject string) error {
 		if seen[key] {
 			return fmt.Errorf("duplicate follow record key %q", key)
 		}
 		seen[key] = true
-		if a.targets[subject] || j.did == a.owner {
+		if subject != "" && (a.targets[subject] || j.did == a.owner) {
 			records[key] = subject
 		}
-	}
-	var next string
-	if page.Cursor != nil {
-		next = *page.Cursor
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	return a.savePage(ctx, j, cursor, next, records)
 }

@@ -240,3 +240,25 @@ func FuzzMalformedStreamRecord(f *testing.F) {
 		}
 	})
 }
+
+func TestOwnerInventorySkipsMalformedFollowValues(t *testing.T) {
+	a := openStore(t, ":memory:")
+	configure(t, a)
+	execute(t, a, dirty, owner)
+	job, err := a.claim(t.Context(), false)
+	requireOK(t, err)
+	connect(a, func(*http.Request) (*http.Response, error) {
+		return reply(200, fmt.Sprintf(`{"records":[
+			{"uri":"at://%s/app.bsky.graph.follow/bad","value":{"$type":"example.unknown.record","subject":123}},
+			{"uri":"at://%s/app.bsky.graph.follow/valid","value":{"$type":"app.bsky.graph.follow","subject":%q}}
+		]}`, owner, owner, actor)), nil
+	})
+	requireOK(t, a.scanPage(t.Context(), a.api.Client, job))
+	if got := pairs(t, a, "SELECT rkey,target FROM edges WHERE actor=?", owner); !maps.Equal(got, map[string]string{"valid": actor}) {
+		t.Fatalf("owner follows = %v", got)
+	}
+	err = a.QueryRow("SELECT did FROM scans WHERE did=?", owner).Scan(new(string))
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("owner scan still pending: %v", err)
+	}
+}

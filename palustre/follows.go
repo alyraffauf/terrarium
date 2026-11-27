@@ -29,58 +29,77 @@ func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets 
 	seen := make(map[string]bool)
 	cursor := ""
 	for {
-		// Indigo's RepoListRecords decoder rejects the whole page if a single
-		// record has an unknown type or malformed value. Decode values separately.
-		var page struct {
-			atproto.RepoListRecords_Output
-			Records []struct {
-				atproto.RepoListRecords_Record
-				Value json.RawMessage `json:"value"`
-			} `json:"records"`
-		}
-		params := map[string]any{"repo": did, "collection": FollowCollection, "limit": 100}
-		if cursor != "" {
-			params["cursor"] = cursor
-		}
-		if err := client.LexDo(ctx, lexutil.Query, "", "com.atproto.repo.listRecords", params, nil, &page); err != nil {
+		next, err := ListFollowPage(ctx, client, did, cursor, func(_, subject string) error {
+			if subject != "" && (targets == nil || targets[subject]) {
+				follows[subject] = true
+			}
+			return nil
+		})
+		if err != nil {
 			return nil, err
-		}
-		if page.Records == nil {
-			return nil, fmt.Errorf("follow inventory response has no records array")
-		}
-		for _, record := range page.Records {
-			uri, err := syntax.ParseATURI(record.Uri)
-			if err != nil || uri.Authority().String() != did || uri.Collection().String() != FollowCollection || uri.RecordKey().String() == "" {
-				return nil, fmt.Errorf("unexpected follow record URI %q in repository %s", record.Uri, did)
-			}
-			var follow bsky.GraphFollow
-			if err := json.Unmarshal(record.Value, &follow); err != nil {
-				slog.WarnContext(ctx, "skipping malformed follow record", "error", err)
-				continue
-			}
-			if _, err := syntax.ParseDID(follow.Subject); err != nil {
-				slog.WarnContext(ctx, "skipping invalid follow subject", "error", err)
-				continue
-			}
-			if follow.LexiconTypeID != FollowCollection {
-				slog.WarnContext(ctx, "skipping unexpected record type in follow inventory", "type", follow.LexiconTypeID)
-				continue
-			}
-			if targets == nil || targets[follow.Subject] {
-				follows[follow.Subject] = true
-			}
 		}
 		if len(targets) > 0 && len(follows) == len(targets) {
 			return follows, nil
 		}
-		if page.Cursor == nil || *page.Cursor == "" {
+		if next == "" {
 			break
 		}
-		if seen[*page.Cursor] {
+		if seen[next] {
 			return nil, fmt.Errorf("follow inventory repeated pagination cursor")
 		}
-		seen[*page.Cursor] = true
-		cursor = *page.Cursor
+		seen[next] = true
+		cursor = next
 	}
 	return follows, nil
+}
+
+// ListFollowPage reads a PDS page and visits records with valid envelope URIs.
+// Malformed record values are reported with an empty subject.
+func ListFollowPage(ctx context.Context, client *xrpc.Client, did, cursor string, visit func(key, subject string) error) (string, error) {
+	// Indigo's RepoListRecords decoder rejects the whole page if a single
+	// record has an unknown type or malformed value. Decode values separately.
+	var page struct {
+		atproto.RepoListRecords_Output
+		Records []struct {
+			atproto.RepoListRecords_Record
+			Value json.RawMessage `json:"value"`
+		} `json:"records"`
+	}
+	params := map[string]any{"repo": did, "collection": FollowCollection, "limit": 100}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
+	if err := client.LexDo(ctx, lexutil.Query, "", "com.atproto.repo.listRecords", params, nil, &page); err != nil {
+		return "", err
+	}
+	if page.Records == nil {
+		return "", fmt.Errorf("follow inventory response has no records array")
+	}
+	for _, record := range page.Records {
+		uri, err := syntax.ParseATURI(record.Uri)
+		if err != nil || uri.Authority().String() != did || uri.Collection().String() != FollowCollection || uri.RecordKey().String() == "" {
+			return "", fmt.Errorf("unexpected follow record URI %q in repository %s", record.Uri, did)
+		}
+		var follow bsky.GraphFollow
+		subject := ""
+		err = json.Unmarshal(record.Value, &follow)
+		_, didErr := syntax.ParseDID(follow.Subject)
+		switch {
+		case err != nil:
+			slog.WarnContext(ctx, "skipping malformed follow record", "error", err)
+		case didErr != nil:
+			slog.WarnContext(ctx, "skipping invalid follow subject", "error", didErr)
+		case follow.LexiconTypeID != FollowCollection:
+			slog.WarnContext(ctx, "skipping unexpected record type in follow inventory", "type", follow.LexiconTypeID)
+		default:
+			subject = follow.Subject
+		}
+		if err := visit(uri.RecordKey().String(), subject); err != nil {
+			return "", err
+		}
+	}
+	if page.Cursor == nil {
+		return "", nil
+	}
+	return *page.Cursor, nil
 }
