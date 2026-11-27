@@ -5,8 +5,8 @@ import (
 	"fmt"
 
 	"github.com/bluesky-social/indigo/api/atproto"
+	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	lexutil "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/xrpc"
 
 	"github.com/alyraffauf/terrarium/palustre"
@@ -20,18 +20,21 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 	seen := map[string]bool{}
 	cursor := ""
 	for {
-		var page struct {
-			Cursor    *string `json:"cursor"`
-			Followers []struct {
-				Did string `json:"did"`
-			} `json:"followers"`
-		}
-		err := client.LexDo(ctx, lexutil.Query, "", "app.bsky.graph.getFollowers", map[string]any{"actor": api.actor, "cursor": cursor, "limit": 100}, nil, &page)
+		page, err := bsky.GraphGetFollowers(ctx, client, api.actor, cursor, 100, "")
 		if err != nil {
 			return err
 		}
+		if page.Subject == nil || page.Subject.Did != api.actor {
+			return fmt.Errorf("follower response subject does not match %s", api.actor)
+		}
+		if page.Followers == nil {
+			return fmt.Errorf("follower response has no followers array")
+		}
 		dids := make([]string, 0, len(page.Followers))
 		for _, follower := range page.Followers {
+			if follower == nil {
+				return fmt.Errorf("follower response includes a null profile")
+			}
 			if _, err := syntax.ParseDID(follower.Did); err != nil {
 				return err
 			}
@@ -78,6 +81,9 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 	}
 	if err != nil {
 		return subject, err
+	}
+	if status.Did != did {
+		return subject, fmt.Errorf("repository status DID does not match %s", did)
 	}
 	if !status.Active {
 		return subject, nil

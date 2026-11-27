@@ -20,3 +20,14 @@ func (api *session) syncFollows(ctx context.Context, db *store, force bool) erro
 	}
 	return db.applyFollowSnapshot(ctx, version, follows)
 }
+
+func (db *store) checkFollowSnapshot(ctx context.Context) error {
+	version, applied, err := db.followVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if version != applied {
+		return errFollowSnapshotSuperseded
+	}
+	return nil
+}

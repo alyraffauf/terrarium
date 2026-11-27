@@ -2,6 +2,7 @@ package helix
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -59,7 +60,11 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 				continue
 			}
 			result.subject.excluded = followed || result.work.DID == api.Client.Auth.Did
+			result.subject.beforeWrite = db.checkFollowSnapshot
 			err = applySubject(ctx, targets, result.work, result.subject, db)
+		}
+		if errors.Is(err, errFollowSnapshotSuperseded) {
+			continue
 		}
 		if err != nil {
 			if ctx.Err() != nil {

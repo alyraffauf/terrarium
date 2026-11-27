@@ -34,7 +34,7 @@ nix run .#helix -- first.example.com \
 	--list 'first.example.com=at://did:plc:YOUR_DID/app.bsky.graph.list/LIST_KEY'
 ```
 
-An existing list must belong to the owner, have the managed title and description or the legacy name `Followers of <current handle>`, and have moderation purpose. Helix manages all membership in that list. Conflicting saved bindings fail. Deleted lists are recreated at the same URI. Removing a target from configuration stops its updates without deleting the list or its saved binding.
+An existing list must belong to the owner, have the managed title and description or the legacy name `Followers of <current handle>`, and have moderation purpose. Helix saves a new binding after it verifies or creates the list. Conflicting saved bindings stop startup. If a target is suspended or its list check fails, Helix pauses writes to that list and retries the check after one minute. Other lists keep syncing. A successful check after a pause triggers a new follower backfill and list-item scan. Deleted lists are recreated at the same URI. Removing a target from configuration stops its updates without deleting the list or its saved binding.
 
 Helix backfills followers from the AppView at startup and every `--rescan-interval`, which defaults to six hours. Jetstream follow and unfollow events trigger checks against candidates' current PDSes. Account events recheck known candidates. Accounts confirmed inactive leave the lists.
 

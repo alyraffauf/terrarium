@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/bluesky-social/indigo/xrpc"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/bluesky-social/indigo/xrpc"
 )
 
 func TestBatchAppliesReadyResultBeforeSlowPDSAndRechecksExclusions(t *testing.T) {
@@ -104,5 +105,49 @@ func TestBatchAppliesReadyResultBeforeSlowPDSAndRechecksExclusions(t *testing.T)
 	}
 	if api.ChecksCompleted.Load() != 2 || api.MembersAdded.Load() != 1 {
 		t.Fatal("incorrect progress counters")
+	}
+}
+
+func TestBatchDefersWriteWhenOwnerExclusionBecomesStale(t *testing.T) {
+	ctx := context.Background()
+	db := testStore(t)
+	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.queueScan(ctx, followerDID); err != nil {
+		t.Fatal(err)
+	}
+	work, err := db.next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/xrpc/blue.microcosm.identity.resolveMiniDoc":
+			fmt.Fprintf(w, `{"did":%q,"pds":%q}`, followerDID, server.URL)
+		case "/xrpc/com.atproto.sync.getRepoStatus":
+			fmt.Fprintf(w, `{"did":%q,"active":true}`, r.URL.Query().Get("did"))
+		case "/xrpc/com.atproto.repo.listRecords":
+			fmt.Fprintf(w, `{"records":[{"uri":"at://%s/app.bsky.graph.follow/first","value":{"$type":"app.bsky.graph.follow","subject":%q}}]}`, r.URL.Query().Get("repo"), firstDID)
+		case "/xrpc/com.atproto.repo.getRecord":
+			if err := db.ingest(ctx, "", checkpoint{}, true); err != nil {
+				t.Error(err)
+			}
+			http.Error(w, `{"error":"RecordNotFound"}`, http.StatusNotFound)
+		default:
+			t.Errorf("unexpected write after exclusion invalidation: %s", r.URL.Path)
+			http.Error(w, `{"error":"UnexpectedRequest"}`, http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	api := newSession(Config{Slingshot: server.URL}, server.Client(), &xrpc.Client{Host: server.URL, Client: server.Client(), Auth: &xrpc.AuthInfo{Did: ownerDID}})
+	targets := []*listTarget{{session: api, actor: firstDID, listURI: "at://" + ownerDID + "/" + listCollection + "/first"}}
+	if err := processBatch(ctx, targets, []job{work}, db); err != nil {
+		t.Fatal(err)
+	}
+	if pending, err := db.next(ctx); err != nil || pending != work {
+		t.Fatalf("deferred check failed to stay ready: %+v %v", pending, err)
 	}
 }

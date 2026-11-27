@@ -2,26 +2,18 @@ package helix
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
-	"strings"
 	"time"
-
-	"github.com/bluesky-social/indigo/atproto/syntax"
 
 	"github.com/alyraffauf/terrarium/palustre"
 )
 
 const streamPath = palustre.StreamPath
-const eventPrefix = palustre.EventPrefix
 
 var errStreamGap = palustre.ErrStreamGap
 
-type streamFrame = palustre.Frame
-
-func collect(ctx context.Context, cfg Config, db *store, rescan chan<- struct{}, watched map[string]bool) error {
+func collect(ctx context.Context, cfg Config, db *store, watched map[string]bool) error {
 	delay := time.Second
 	for ctx.Err() == nil {
 		started := time.Now()
@@ -32,10 +24,6 @@ func collect(ctx context.Context, cfg Config, db *store, rescan chan<- struct{},
 		if errors.Is(err, errStreamGap) {
 			if err := db.resetStream(ctx); err != nil {
 				return err
-			}
-			select {
-			case rescan <- struct{}{}:
-			default:
 			}
 		}
 		slog.Warn("Jetstream disconnected", "error", err, "retry_in", delay)
@@ -75,47 +63,23 @@ func stream(ctx context.Context, endpoint string, db *store, watched map[string]
 }
 
 func ingestFrame(ctx context.Context, db *store, endpoint, owner string, payload []byte, watched map[string]bool, saveUnrelated bool) error {
-	var frame streamFrame
-	if err := json.Unmarshal(payload, &frame); err != nil {
-		return fmt.Errorf("%w: malformed JSON", errStreamGap)
+	event, err := palustre.ClassifyFrame(payload)
+	if err != nil {
+		return err
 	}
-	if frame.Type == "error" {
-		if frame.Error == "CursorTooOld" {
-			return errStreamGap
-		}
-		return fmt.Errorf("Jetstream %s: %s", frame.Error, frame.Message)
+	if event.Recover {
+		return recoverFrame(ctx, db, endpoint, event.Payload.Seq, payload)
 	}
-	if frame.Type != "message" || !strings.HasPrefix(frame.Payload.Type, eventPrefix) {
-		return recoverFrame(ctx, db, endpoint, frame, payload)
-	}
-	update := frame.Payload
-	kind := strings.TrimPrefix(update.Type, eventPrefix)
-	if kind == "info" {
-		if update.Name == "OutdatedCursor" || update.Name == "FutureCursor" {
-			return errStreamGap
-		}
+	if event.Kind == "info" {
 		return nil
 	}
-	if update.Seq <= 0 {
-		return fmt.Errorf("%w: invalid sequence", errStreamGap)
-	}
-	timestamp := update.WitnessedAt
-	if timestamp == "" {
-		timestamp = update.Time
-	}
-	witnessed, err := time.Parse(time.RFC3339Nano, timestamp)
-	if err != nil {
-		return recoverFrame(ctx, db, endpoint, frame, payload)
-	}
-	if _, err := syntax.ParseDID(update.DID); err != nil {
-		return recoverFrame(ctx, db, endpoint, frame, payload)
-	}
+	update := event.Payload
 	did := ""
 	known, err := db.knownCandidate(ctx, update.DID)
 	if err != nil {
 		return err
 	}
-	switch kind {
+	switch event.Kind {
 	case "identity", "account":
 		if known {
 			did = update.DID
@@ -123,45 +87,24 @@ func ingestFrame(ctx context.Context, db *store, endpoint, owner string, payload
 	case "sync":
 		did = update.DID
 	case "commit":
-		if update.Collection == "app.bsky.graph.follow" {
-			switch update.Operation {
-			case "create", "update":
-				var record struct {
-					Subject string `json:"subject"`
-				}
-				if err := json.Unmarshal(update.Record, &record); err != nil {
-					return recoverFrame(ctx, db, endpoint, frame, payload)
-				}
-				if watched[record.Subject] || known {
-					did = update.DID
-				}
-			case "delete":
-				if known {
-					did = update.DID
-				}
-			default:
-				return recoverFrame(ctx, db, endpoint, frame, payload)
-			}
+		if update.Collection == palustre.FollowCollection && (event.MalformedFollow || watched[event.FollowSubject] || known) {
+			did = update.DID
 		}
-	default:
-		return recoverFrame(ctx, db, endpoint, frame, payload)
 	}
-	followChanged := update.DID == owner && (kind == "sync" || kind == "commit" && update.Collection == "app.bsky.graph.follow")
+	followChanged := update.DID == owner && (event.Kind == "sync" || event.Kind == "commit" && update.Collection == palustre.FollowCollection)
 	if did == "" && !followChanged && !saveUnrelated {
 		return nil
 	}
 
-	return db.ingest(ctx, did, checkpoint{TimeUS: witnessed.UnixMicro(), Seq: update.Seq, Endpoint: endpoint}, followChanged)
+	return db.ingest(ctx, did, checkpoint{TimeUS: event.Witnessed.UnixMicro(), Seq: update.Seq, Endpoint: endpoint}, followChanged)
 }
 
 var pause = palustre.Pause
 
-func recoverFrame(ctx context.Context, db *store, endpoint string, frame streamFrame, payload []byte) error {
-	slog.Warn("skipping invalid Jetstream event; requesting reconciliation", "frame", string(payload[:min(len(payload), 2048)]))
-	if frame.Payload.Seq <= 0 {
-		return errStreamGap
-	}
+func recoverFrame(ctx context.Context, db *store, endpoint string, seq int64, payload []byte) error {
+	detail := string(payload[:min(len(payload), 2048)])
+	slog.Warn("skipping invalid Jetstream event; requesting reconciliation", "frame", detail)
 	// Preserve the last trusted timestamp while advancing this instance's sequence.
 	// Dirty follows and request durable backfill before accepting later events.
-	return db.recoverStream(ctx, endpoint, frame.Payload.Seq, string(payload[:min(len(payload), 2048)]))
+	return db.recoverStream(ctx, endpoint, seq, detail)
 }

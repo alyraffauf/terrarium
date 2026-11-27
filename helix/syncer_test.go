@@ -32,9 +32,27 @@ func testStore(t *testing.T) *store {
 func frame(did, operation, subject string, seq int) []byte {
 	record := "null"
 	if operation != "delete" {
-		record = fmt.Sprintf(`{"subject":%q}`, subject)
+		record = fmt.Sprintf(`{"$type":"app.bsky.graph.follow","subject":%q}`, subject)
 	}
 	return []byte(fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","did":%q,"seq":%d,"time":"2026-11-16T00:00:00Z","collection":"app.bsky.graph.follow","operation":%q,"rkey":"follow-key","record":%s}}`, did, seq, operation, record))
+}
+
+func TestMalformedFollowQueuesOnlyItsActorAndAdvancesCheckpoint(t *testing.T) {
+	ctx := context.Background()
+	db := testStore(t)
+	payload := frame(followerDID, "create", "invalid", 18)
+	const endpoint = "wss://jetstream.example"
+	if err := ingestFrame(ctx, db, endpoint, ownerDID, payload, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	work, err := db.next(ctx)
+	if err != nil || work.DID != followerDID {
+		t.Fatalf("malformed follow actor not queued: %+v %v", work, err)
+	}
+	state, err := db.queries.GetState(ctx)
+	if err != nil || state.StreamSeq != 18 || state.RescanRequested != 0 || state.FollowVersion != 0 {
+		t.Fatalf("malformed non-owner follow caused global recovery: %+v %v", state, err)
+	}
 }
 
 func TestFollowAndDeleteSurviveRestartAndCheckpointAtomically(t *testing.T) {
@@ -264,12 +282,12 @@ func TestBackfillPaginatesAndRechecksFormerMembers(t *testing.T) {
 		}
 		pages++
 		if pages == 1 {
-			fmt.Fprintf(w, `{"followers":[{"did":%q}],"cursor":"next"}`, followerDID)
+			fmt.Fprintf(w, `{"subject":{"did":%q},"followers":[{"did":%q}],"cursor":"next"}`, firstDID, followerDID)
 		} else {
 			if r.URL.Query().Get("cursor") != "next" {
 				t.Error("missing cursor")
 			}
-			fmt.Fprintf(w, `{"followers":[{"did":%q}]}`, secondDID)
+			fmt.Fprintf(w, `{"subject":{"did":%q},"followers":[{"did":%q}]}`, firstDID, secondDID)
 		}
 	}))
 	defer server.Close()
@@ -309,6 +327,12 @@ func TestListBindingsUseResolvedDIDs(t *testing.T) {
 	api := newSession(Config{Slingshot: server.URL, Targets: []Target{{Actor: "old.example"}}}, server.Client(), &xrpc.Client{Auth: &xrpc.AuthInfo{Did: ownerDID}})
 	first, err := api.prepareTargets(ctx, db)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.queries.GetList(ctx, firstDID); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("saved binding before verifying the remote list: %v", err)
+	}
+	if _, err := db.bindList(ctx, Target{Actor: firstDID, ListURI: first[0].listURI}, ownerDID); err != nil {
 		t.Fatal(err)
 	}
 	api.cfg.Targets = []Target{{Actor: "new.example"}}
