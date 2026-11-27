@@ -102,13 +102,6 @@ type subjectState struct {
 	follows     map[string]bool
 }
 
-func (api *listTarget) reconcile(ctx context.Context, work job, db *store) error {
-	subject, err := api.subject(ctx, db, work.DID, api.actor)
-	if err != nil {
-		return err
-	}
-	return api.reconcileSubject(ctx, subject, db)
-}
 func (api *listTarget) reconcileSubject(ctx context.Context, subject subjectState, db *store) error {
 	if api.suspended.Load() {
 		return nil
