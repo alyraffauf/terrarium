@@ -28,6 +28,7 @@ type remoteItem struct {
 	Subject string `json:"subject"`
 }
 type testRepository struct {
+	links  map[string]string
 	likes  map[string]bool
 	items  map[string]remoteItem
 	fault  byte
@@ -63,6 +64,17 @@ func window[T any](rows []T, cursor string) ([]T, string, error) {
 func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error) {
 	q := req.URL.Query()
 	switch strings.TrimPrefix(req.URL.Path, "/xrpc/") {
+	case "blue.microcosm.links.getBacklinks":
+		if q.Get("subject") != post || q.Get("source") != "app.bsky.feed.like:subject.uri" {
+			return nil, fmt.Errorf("wrong backlinks query")
+		}
+		rows := []any{}
+		for did := range repo.links {
+			rows = append(rows, map[string]string{"did": did, "collection": "app.bsky.feed.like", "rkey": "record"})
+		}
+		return wire(200, map[string]any{"records": rows})
+	case "blue.microcosm.identity.resolveMiniDoc":
+		return wire(200, map[string]string{"did": q.Get("identifier"), "pds": "https://actor.test"})
 	case "app.bsky.feed.getLikes":
 		if q.Get("uri") != post {
 			return nil, fmt.Errorf("wrong post %q", q.Get("uri"))
@@ -110,6 +122,10 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		return wire(200, map[string]any{"records": page, "cursor": next})
 	case "com.atproto.repo.getRecord":
+		if req.URL.Host == "actor.test" && q.Get("collection") == "app.bsky.feed.like" {
+			did := q.Get("repo")
+			return wire(200, map[string]any{"uri": "at://" + did + "/app.bsky.feed.like/record", "value": map[string]any{"$type": "app.bsky.feed.like", "subject": map[string]string{"uri": repo.links[did], "cid": "bafyreig3iv5ohbzqhbwj3swk6bib7pdry4gderik2x7dg2b5v3ak75sh2e"}}})
+		}
 		v, ok := repo.items[q.Get("rkey")]
 		if !ok {
 			return wire(404, map[string]string{"error": "RecordNotFound"})
@@ -146,8 +162,8 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 
 func (repo *testRepository) scan(ctx context.Context) error {
 	client := &xrpc.Client{Host: "https://repo.test", Client: &http.Client{Transport: repo}, Auth: &xrpc.AuthInfo{Did: owner}}
-	api := &palustre.Session{Client: client, Refreshed: time.Now(), Config: palustre.Config{WriteInterval: time.Nanosecond}}
-	return syncPost(ctx, api, client, post, list)
+	api := &palustre.Session{HTTP: client.Client, Client: client, Refreshed: time.Now(), Config: palustre.Config{WriteInterval: time.Nanosecond}}
+	return syncPost(ctx, api, client, client.Host, post, list)
 }
 
 func FuzzLikerMembership(f *testing.F) {
@@ -264,4 +280,20 @@ func FuzzPostReference(f *testing.F) {
 			t.Fatalf("accepted invalid post %q", input)
 		}
 	})
+}
+
+func TestVerifiedBacklinksDuringAppViewFailure(t *testing.T) {
+	const liker = "did:example:liker"
+	repo := testRepository{likes: map[string]bool{}, links: map[string]string{liker: post, "did:example:other": otherList}, items: map[string]remoteItem{"old": {Type: palustre.ItemCollection, List: list, Subject: "did:example:old"}}, fault: 2}
+	if err := repo.scan(t.Context()); err == nil {
+		t.Fatal("incomplete discovery reported success")
+	}
+	if len(repo.items) != 2 || repo.items["old"].Subject == "" {
+		t.Fatalf("lost existing member: %v", repo.items)
+	}
+	for key, item := range repo.items {
+		if key != "old" && item.Subject != liker {
+			t.Fatalf("wrong backlink member: %v", item)
+		}
+	}
 }

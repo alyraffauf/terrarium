@@ -33,6 +33,8 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 					fmt.Fprintf(w, `{"did":%q,"handle":"owner.example","accessJwt":"access","refreshJwt":"refresh"}`, owner)
 				case "/xrpc/com.atproto.repo.getRecord":
 					http.Error(w, `{"error":"RecordNotFound"}`, 404)
+				case "/xrpc/blue.microcosm.links.getBacklinks":
+					fmt.Fprint(w, `{"records":[]}`)
 				case "/xrpc/app.bsky.feed.getLikes":
 					if r.URL.Query().Get("uri") != post {
 						t.Error("queried wrong post")
@@ -78,7 +80,7 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 			t.Setenv("CORDATA_IDENTIFIER", "owner.example")
 			t.Setenv("CORDATA_APP_PASSWORD", "test-password")
 			cmd := command()
-			cmd.SetArgs([]string{"--appview=" + server.URL, "--login-pds=" + server.URL, "--slingshot=" + server.URL, "--write-interval=1ns", input})
+			cmd.SetArgs([]string{"--constellation=" + server.URL, "--appview=" + server.URL, "--login-pds=" + server.URL, "--slingshot=" + server.URL, "--write-interval=1ns", input})
 			if err := cmd.ExecuteContext(ctx); err != nil {
 				t.Fatal(err)
 			}

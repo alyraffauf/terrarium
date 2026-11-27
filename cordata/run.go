@@ -2,6 +2,7 @@ package cordata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
+	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/xrpc"
@@ -60,28 +62,9 @@ func (items inventory) RememberMember(_ context.Context, _, did, key string) err
 }
 func (items inventory) ForgetMember(_ context.Context, _, key string) error { return nil }
 
-func pages(read func(string) (*string, error)) error {
-	seen := map[string]bool{}
-	cursor := ""
-	for {
-		next, err := read(cursor)
-		if err != nil {
-			return err
-		}
-		if next == nil || *next == "" {
-			return nil
-		}
-		if seen[*next] {
-			return fmt.Errorf("repeated pagination cursor")
-		}
-		cursor = *next
-		seen[cursor] = true
-	}
-}
-
-func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, post, list string) error {
+func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, constellation, post, list string) error {
 	likers := map[string]bool{}
-	err := pages(func(cursor string) (*string, error) {
+	appErr := palustre.WalkPages(func(cursor string) (*string, error) {
 		page, err := bsky.FeedGetLikes(ctx, view, "", cursor, 100, post)
 		if err != nil {
 			return nil, err
@@ -100,11 +83,13 @@ func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, pos
 		}
 		return page.Cursor, nil
 	})
-	if err != nil {
-		return err
+	if appErr != nil {
+		clear(likers)
 	}
+	linkErr := scanLikeBacklinks(ctx, api, constellation, post, likers)
+	discoveryErr := errors.Join(appErr, linkErr)
 	items := inventory{}
-	err = palustre.WalkListItems(ctx, api.Client, func(uri, did, key string) error {
+	err := palustre.WalkListItems(ctx, api.Client, func(uri, did, key string) error {
 		if uri == list {
 			items[did] = append(items[did], key)
 		}
@@ -115,7 +100,9 @@ func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, pos
 	}
 	subjects := maps.Clone(likers)
 	for did := range items {
-		subjects[did] = true
+		if discoveryErr == nil {
+			subjects[did] = true
+		}
 	}
 	var firstFailure error
 	for _, did := range slices.Sorted(maps.Keys(subjects)) {
@@ -131,13 +118,67 @@ func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, pos
 			}
 		}
 	}
-	return firstFailure
+	return errors.Join(firstFailure, discoveryErr)
+}
+
+func scanLikeBacklinks(ctx context.Context, api *palustre.Session, endpoint, post string, likers map[string]bool) error {
+	const collection = "app.bsky.feed.like"
+	client := &xrpc.Client{Host: endpoint, Client: api.HTTP}
+	var verifyErr error
+	pageErr := palustre.WalkPages(func(cursor string) (*string, error) {
+		rows, next, err := palustre.BacklinksPage(ctx, client, post, collection, "subject.uri", cursor)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if likers[row.Did] {
+				continue
+			}
+			ok, err := verifyLike(ctx, api, row, post)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				if verifyErr == nil {
+					verifyErr = err
+				}
+				continue
+			}
+			if ok {
+				likers[row.Did] = true
+			}
+		}
+		return next, nil
+	})
+	return errors.Join(pageErr, verifyErr)
+}
+
+func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backlink, post string) (bool, error) {
+	doc, err := api.Resolve(ctx, row.Did)
+	if err != nil {
+		return false, err
+	}
+	record, err := atproto.RepoGetRecord(ctx, &xrpc.Client{Host: doc.PDS, Client: api.HTTP}, "", row.Collection, row.Did, row.Rkey)
+	if palustre.XRPCCode(err, "RecordNotFound") {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if record.Uri != "at://"+row.Did+"/"+row.Collection+"/"+row.Rkey || record.Value == nil {
+		return false, fmt.Errorf("invalid like record for %s", row.Did)
+	}
+	like, ok := record.Value.Val.(*bsky.FeedLike)
+	if !ok || like.Subject == nil {
+		return false, fmt.Errorf("invalid like value for %s", row.Did)
+	}
+	return like.Subject.Uri == post, nil
 }
 
 type Config struct {
 	palustre.Config
-	AppView, Post  string
-	RescanInterval time.Duration
+	AppView, Post, Constellation string
+	RescanInterval               time.Duration
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -151,7 +192,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	for _, base := range []*string{&cfg.AppView, &cfg.Slingshot} {
+	for _, base := range []*string{&cfg.AppView, &cfg.Slingshot, &cfg.Constellation} {
 		*base, err = palustre.NormalizePDS(*base)
 		if err != nil {
 			return err
@@ -182,7 +223,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		if err == nil {
 			slog.Info("maintaining list", "post", post, "list", list)
-			err = syncPost(ctx, api, view, post, list)
+			err = syncPost(ctx, api, view, cfg.Constellation, post, list)
 		}
 		delay := cfg.RescanInterval
 		if err != nil && ctx.Err() == nil {

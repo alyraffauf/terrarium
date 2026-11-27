@@ -51,7 +51,7 @@ func command() *cobra.Command {
 					Slingshot:     config.GetString("slingshot"),
 					WriteInterval: intervals.Write,
 				},
-				AppView:        config.GetString("appview"),
+				Constellation: config.GetString("constellation"), AppView: config.GetString("appview"),
 				Post:           args[0],
 				RescanInterval: intervals.Rescan,
 			})
@@ -62,6 +62,7 @@ func command() *cobra.Command {
 	flags.String("app-password", "", "List owner's app password")
 	flags.String("login-pds", "", "List owner's PDS (default: resolve automatically)")
 	flags.String("slingshot", "https://slingshot.aly.town", "Identity resolver URL")
+	flags.String("constellation", palustre.DefaultConstellation, "Constellation backlink index URL")
 	flags.String("appview", "https://public.api.bsky.app", "AppView for post likes")
 	flags.Duration("rescan-interval", 5*time.Minute, "Time between completed list scans")
 	flags.Duration("write-interval", palustre.DefaultWriteInterval, "Minimum interval between writes")
