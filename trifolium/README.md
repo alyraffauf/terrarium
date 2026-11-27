@@ -52,7 +52,7 @@ If you supply only named clusters when upgrading a single-list database, the fir
 
 Bluesky and Constellation supply follower candidates. Trifolium checks follow records directly on each account's PDS. Constellation backlinks include record keys, which allow workers to check individual records. Four workers share the verification queue, with up to two concurrent reads per PDS.
 
-Full inventories save their cursor in SQLite after each page. Confirmed follows count immediately. An inventory removes missing follows only after its final page succeeds. Discovery runs every 24 hours by default. Each source has its own deadline, which survives restarts. To change the interval, set `--rescan-interval` or the Helm value `rescanInterval`.
+Full inventories save their cursor in SQLite after each page. Confirmed follows count immediately. An inventory removes missing follows only after its final page succeeds. Discovery runs every 24 hours by default. Discovery reads one page at a time and rotates across targets and sources. SQLite stores the next cursor and deadline for each pair, so a restart resumes the crawl. To change the interval, set `--rescan-interval` or the Helm value `rescanInterval`.
 
 Jetstream follow creates, updates, and deletes change local eligibility. A stream gap or endpoint change schedules rediscovery and follow checks. Follower coverage depends on the two indexes, available Jetstream history, and reachable PDSes.
 
