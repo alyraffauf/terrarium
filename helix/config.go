@@ -2,6 +2,7 @@ package helix
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,6 +73,7 @@ func (cfg *Config) validate() error {
 	if len(cfg.Targets) == 0 || cfg.Identifier == "" || cfg.Password == "" {
 		return fmt.Errorf("account, identifier, and app-password are required (flags or HELIX_ environment variables)")
 	}
+	cfg.Targets = slices.Clone(cfg.Targets)
 	var err error
 	seen := make(map[string]bool)
 	for i := range cfg.Targets {

@@ -3,6 +3,7 @@ package capensis
 import (
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,6 +77,7 @@ func (cfg *Config) validate() error {
 	if len(cfg.Targets) == 0 || cfg.Identifier == "" || cfg.Password == "" {
 		return fmt.Errorf("pds, identifier, and app-password are required (flags or CAPENSIS_ environment variables)")
 	}
+	cfg.Targets = slices.Clone(cfg.Targets)
 	var err error
 	seen := make(map[string]bool)
 	for i := range cfg.Targets {
