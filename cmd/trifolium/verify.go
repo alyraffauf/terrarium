@@ -49,17 +49,24 @@ func (a *service) claim(ctx context.Context, preferHint bool) (j verifyJob, err 
 	})
 	return
 }
-func (a *service) acquireHost(host string) bool {
+func (a *service) acquireHost(host string) func() {
 	a.hostMu.Lock()
 	defer a.hostMu.Unlock()
 	if a.hostReads == nil {
 		a.hostReads = map[string]int{}
 	}
 	if a.hostReads[host] >= 2 {
-		return false
+		return nil
 	}
 	a.hostReads[host]++
-	return true
+	return func() {
+		a.hostMu.Lock()
+		defer a.hostMu.Unlock()
+		a.hostReads[host]--
+		if a.hostReads[host] == 0 {
+			delete(a.hostReads, host)
+		}
+	}
 }
 func (a *service) verify(ctx context.Context, preferHint bool) error {
 	j, err := a.claim(ctx, preferHint)
@@ -70,8 +77,8 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 	doc, err := a.api.Resolve(ctx, j.did)
 	delay := 60
 	if err == nil {
-		if a.acquireHost(doc.PDS) {
-			defer func() { a.hostMu.Lock(); a.hostReads[doc.PDS]--; a.hostMu.Unlock() }()
+		if release := a.acquireHost(doc.PDS); release != nil {
+			defer release()
 			client := &xrpc.Client{Host: doc.PDS, Client: a.http}
 			if j.id != 0 {
 				err = a.checkHint(ctx, client, j)
