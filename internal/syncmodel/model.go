@@ -37,6 +37,8 @@ type API struct {
 func Fuzz(f *testing.F, open func(*testing.T, string) API) {
 	f.Add([]byte{1, 2, 1, 3, 2, 4, 2, 0, 2, 3, 2})
 	f.Add([]byte{1, 16, 2, 3, 2})
+	// Retry twice across a reopen, then enqueue an urgent event to reset the attempts.
+	f.Add([]byte{1, 2, 4, 8, 13, 2, 4, 13, 2, 0, 2})
 	f.Add([]byte{0, 16, 1, 18, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15})
 	f.Add([]byte{1, 2, 1, 3, 2, 4, 16, 7, 10, 6, 8, 9, 12, 14})
 	f.Fuzz(func(t *testing.T, trace []byte) {
@@ -50,6 +52,7 @@ func Fuzz(f *testing.F, open func(*testing.T, string) API) {
 		members := map[[2]string]string{}
 		// Work is either event-priority, ordinary scan, or waiting for retry.
 		pending := map[string]int{}
+		attempts := map[string]int{}
 		var held Job
 		var valid bool
 		changed := func(did string, urgent bool) {
@@ -60,6 +63,7 @@ func Fuzz(f *testing.F, open func(*testing.T, string) API) {
 				pending[did] = 1
 				if urgent {
 					pending[did] = 0
+					delete(attempts, did)
 				}
 			}
 		}
@@ -118,6 +122,9 @@ func Fuzz(f *testing.F, open func(*testing.T, string) API) {
 				if !ok || p != priority {
 					t.Fatalf("step %d next %+v pending %v", step, j, pending)
 				}
+				if j.Attempts != attempts[j.DID] {
+					t.Fatalf("step %d job %s: got %d attempts, want %d", step, j.DID, j.Attempts, attempts[j.DID])
+				}
 				held, valid = j, true
 			case 3, 4:
 				if held.DID != "" {
@@ -125,11 +132,13 @@ func Fuzz(f *testing.F, open func(*testing.T, string) API) {
 						check(db.Finish(held))
 						if valid {
 							delete(pending, held.DID)
+							delete(attempts, held.DID)
 						}
 					} else {
 						check(db.Retry(held))
 						if valid {
 							pending[held.DID] = 2
+							attempts[held.DID]++
 						}
 					}
 					held = Job{}
