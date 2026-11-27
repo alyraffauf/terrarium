@@ -9,6 +9,11 @@
     {
       "matchManagers": ["gomod"],
       "groupName": "Go dependencies"
+    },
+    {
+      "matchPackageNames": ["golang", "go"],
+      "matchManagers": ["dockerfile", "github-actions", "gomod"],
+      "groupName": "Go toolchain"
     }
   ]
 }

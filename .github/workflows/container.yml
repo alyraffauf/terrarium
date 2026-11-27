@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       projects: ${{ steps.projects.outputs.projects }}
+      go_image: ${{ steps.projects.outputs.go_image }}
     steps:
       - uses: actions/checkout@v7.0.1
       - id: projects
@@ -22,12 +23,20 @@ jobs:
           import json
           from pathlib import Path
           projects = sorted(path.parent.name for path in Path('.').glob('*/Dockerfile'))
+          builders = {Path(project, 'Dockerfile').read_text().splitlines()[0].split()[1] for project in projects}
+          if len(builders) != 1:
+              raise SystemExit('daemon Dockerfiles must use the same Go builder')
+          builder, suffix, _ = builders.pop().partition('-alpine')
+          if not suffix or not builder.startswith('golang:'):
+              raise SystemExit('expected golang:<version>-alpine build image')
+          print('go_image=' + builder)
           print('projects=' + json.dumps(projects))
           PY
 
   test:
     runs-on: ubuntu-latest
-    container: golang:1.27.4
+    needs: discover
+    container: ${{ needs.discover.outputs.go_image }}
     steps:
       - uses: actions/checkout@v7.0.1
       - run: go test -race ./...
