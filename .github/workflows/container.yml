@@ -42,7 +42,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
       - run: go test -race ./...
-      - run: FUZZTIME=3s ./scripts/fuzz.sh
+      - id: fuzz
+        run: FUZZTIME=3s ./scripts/fuzz.sh
+      - name: Upload fuzz corpus
+        if: failure() && steps.fuzz.outcome == 'failure'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: fuzz-corpus
+          path: '**/testdata/fuzz/**'
+          if-no-files-found: ignore
       - run: go vet ./...
       - run: go build ./cmd/...
 
