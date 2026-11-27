@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
-	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/xrpc"
@@ -38,18 +37,14 @@ func parsePost(raw string) (syntax.ATURI, error) {
 	return uri, nil
 }
 
-func resolvePost(ctx context.Context, client *xrpc.Client, uri syntax.ATURI) (string, error) {
+func resolvePost(ctx context.Context, api *palustre.Session, uri syntax.ATURI) (string, error) {
 	actor := uri.Authority().String()
 	if !strings.HasPrefix(actor, "did:") {
-		resolved, err := atproto.IdentityResolveHandle(ctx, client, actor)
+		resolved, err := api.Resolve(ctx, actor)
 		if err != nil {
 			return "", err
 		}
-		did, err := syntax.ParseDID(resolved.Did)
-		if err != nil {
-			return "", err
-		}
-		actor = did.String()
+		actor = resolved.DID
 	}
 	return "at://" + actor + "/" + uri.Collection().String() + "/" + uri.RecordKey().String(), nil
 }
@@ -170,11 +165,11 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	view := &xrpc.Client{Host: cfg.AppView, Client: httpClient}
-	post, err := resolvePost(ctx, view, uri)
+	api := &palustre.Session{Config: cfg.Config, HTTP: httpClient}
+	post, err := resolvePost(ctx, api, uri)
 	if err != nil {
 		return err
 	}
-	api := &palustre.Session{Config: cfg.Config, HTTP: httpClient}
 	if err := api.Login(ctx); err != nil {
 		return err
 	}

@@ -43,7 +43,7 @@ func (w *World) RoundTrip(r *http.Request) (*http.Response, error) {
 			code = 400
 			value = map[string]string{"error": "AccountTakedown"}
 		} else {
-			value = map[string]string{"did": q.Get("actor"), "handle": w.Handle}
+			value = map[string]string{"did": q.Get("actor"), "handle": "unused.example"}
 		}
 	case "blue.microcosm.identity.resolveMiniDoc":
 		if w.BeforeResolve != nil {
@@ -55,7 +55,7 @@ func (w *World) RoundTrip(r *http.Request) (*http.Response, error) {
 			code = 404
 			value = map[string]string{"error": "NotFound"}
 		} else {
-			value = map[string]any{"did": q.Get("identifier"), "pds": Hosts[w.Host]}
+			value = map[string]any{"did": q.Get("identifier"), "pds": Hosts[w.Host], "handle": w.Handle}
 		}
 	case "com.atproto.sync.getRepoStatus":
 		value = map[string]any{"did": q.Get("did"), "active": w.Active}

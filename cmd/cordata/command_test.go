@@ -27,8 +27,8 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
-				case "/xrpc/com.atproto.identity.resolveHandle":
-					fmt.Fprintf(w, `{"did":%q}`, author)
+				case "/xrpc/blue.microcosm.identity.resolveMiniDoc":
+					fmt.Fprintf(w, `{"did":%q,"handle":"author.example","pds":"https://author.example"}`, author)
 				case "/xrpc/com.atproto.server.createSession":
 					fmt.Fprintf(w, `{"did":%q,"handle":"owner.example","accessJwt":"access","refreshJwt":"refresh"}`, owner)
 				case "/xrpc/com.atproto.repo.getRecord":

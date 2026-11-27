@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/api/bsky"
-	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/xrpc"
 
 	"github.com/alyraffauf/terrarium/helix/storage"
@@ -48,11 +47,14 @@ func (api *listTarget) ensureList(ctx context.Context) error {
 	if profile.Did != api.actor {
 		return fmt.Errorf("profile returned a different target DID")
 	}
-	handle, err := syntax.ParseHandle(profile.Handle)
-	if err != nil || handle.String() == "handle.invalid" {
+	doc, err := api.Resolve(ctx, api.actor)
+	if err != nil {
+		return err
+	}
+	if doc.Handle == "" {
 		return fmt.Errorf("target has no valid handle")
 	}
-	name := listName(handle.String())
+	name := listName(doc.Handle)
 	legacy := name
 	if len(legacy) > 64 {
 		legacy = legacy[:61] + "..."

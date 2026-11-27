@@ -18,8 +18,9 @@ import (
 )
 
 type MiniDoc struct {
-	DID string `json:"did"`
-	PDS string `json:"pds"`
+	Handle string `json:"handle"`
+	DID    string `json:"did"`
+	PDS    string `json:"pds"`
 }
 
 // session owns authentication and the write limiter shared by every list.
@@ -47,6 +48,9 @@ func (api *Session) Resolve(ctx context.Context, identifier string) (MiniDoc, er
 		return MiniDoc{}, fmt.Errorf("Slingshot resolve %s: %w", identifier, err)
 	}
 	doc := MiniDoc{DID: response.Did, PDS: response.Pds}
+	if h, err := syntax.ParseHandle(response.Handle); err == nil && h.Normalize().String() != "handle.invalid" {
+		doc.Handle = h.Normalize().String()
+	}
 	if _, err := syntax.ParseDID(doc.DID); err != nil {
 		return doc, err
 	}

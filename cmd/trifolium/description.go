@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
-	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/bluesky-social/indigo/xrpc"
 )
 
 const oldDescription = "Accounts meeting the configured follower crossover threshold."
@@ -90,31 +88,13 @@ func (a *cluster) desiredDescription(ctx context.Context) (string, error) {
 		return "", err
 	}
 	var handles []string
-	if len(ids) > 0 {
-		client := &xrpc.Client{Host: "https://public.api.bsky.app", Client: a.http}
-		profiles, err := bsky.ActorGetProfiles(ctx, client, ids)
+	for _, id := range ids {
+		doc, err := a.api.Resolve(ctx, id)
 		if err != nil {
 			return "", err
 		}
-		if profiles.Profiles == nil {
-			return "", fmt.Errorf("profiles response missing profiles")
-		}
-		byID := map[string]string{}
-		for _, p := range profiles.Profiles {
-			if p == nil {
-				return "", fmt.Errorf("empty profile")
-			}
-			if _, err := syntax.ParseDID(p.Did); err != nil {
-				return "", err
-			}
-			if h, e := syntax.ParseHandle(p.Handle); e == nil && p.Handle != "handle.invalid" {
-				byID[p.Did] = "@" + h.String()
-			}
-		}
-		for _, id := range ids {
-			if h := byID[id]; h != "" {
-				handles = append(handles, h)
-			}
+		if doc.Handle != "" {
+			handles = append(handles, "@"+doc.Handle)
 		}
 	}
 	return clusterDescription(handles), nil
