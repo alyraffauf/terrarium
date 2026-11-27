@@ -60,7 +60,7 @@ func (w *World) RoundTrip(r *http.Request) (*http.Response, error) {
 	case "com.atproto.sync.getRepoStatus":
 		value = map[string]any{"did": q.Get("did"), "active": w.Active}
 	case "com.atproto.repo.listRecords":
-		var records []any
+		records := make([]any, 0, len(Actors))
 		for i, actor := range Actors {
 			if w.Follows&(1<<i) != 0 {
 				records = append(records, map[string]any{"uri": fmt.Sprintf("at://%s/app.bsky.graph.follow/%d", q.Get("repo"), i), "value": map[string]any{"$type": "app.bsky.graph.follow", "subject": actor}})
