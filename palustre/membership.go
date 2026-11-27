@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -65,12 +63,6 @@ func (api *Session) EnsureClusterList(ctx context.Context, listURI, description 
 	return api.ensureList(ctx, listURI, description, listIdentity{previousNames: previousNames, isPreviousDescription: isClusterDescription})
 }
 
-type listIdentity struct {
-	post                  bool
-	previousNames         []string
-	isPreviousDescription func(string) bool
-}
-
 func (api *Session) ensureList(ctx context.Context, listURI, description string, identity listIdentity) error {
 	key, err := api.listRecordKey(listURI)
 	if err != nil {
@@ -103,57 +95,18 @@ func (api *Session) ensureList(ctx context.Context, listURI, description string,
 	if existing.Value == nil {
 		return fmt.Errorf("managed list has no record value")
 	}
-	list, ok := existing.Value.Val.(*bsky.GraphList)
-	if !ok || list.Purpose == nil || *list.Purpose != purpose {
-		return fmt.Errorf("%w: expected moderation list at %s", ErrUnrelatedList, listURI)
-	}
-	text := ""
-	if list.Description != nil {
-		text = *list.Description
-	}
-	lines := strings.Split(text, "\n")
-	last := lines[len(lines)-1]
-	legacy := list.Name == description || slices.Contains(identity.previousNames, list.Name)
-	if identity.post {
-		legacy = text == description
-	}
-	if list.Name == title && (last == description || (identity.post && lines[0] == description)) {
-		return nil
-	}
-	previousDescription := slices.Contains(identity.previousNames, last)
-	if list.Name == title && identity.isPreviousDescription != nil && identity.isPreviousDescription(last) {
-		previousDescription = true
-	}
-	if !legacy && !(list.Name == title && previousDescription && last != "") {
-		return fmt.Errorf("%w: refusing to adopt %s", ErrUnrelatedList, listURI)
-	}
-	// Keep existing prose and its facets at the same byte offsets.
-	if last == description {
-		if identity.post && list.Name != title && list.Name != description {
-			lines = append(lines, list.Name)
-		}
-	} else if last == "" || previousDescription {
-		lastStart := int64(len(text) - len(last))
-		list.DescriptionFacets = slices.DeleteFunc(list.DescriptionFacets, func(facet *bsky.RichtextFacet) bool {
-			return facet == nil || facet.Index == nil || facet.Index.ByteEnd > lastStart
-		})
-		lines[len(lines)-1] = description
-	} else {
-		lines = append(lines, description)
-	}
-	text = strings.Join(lines, "\n")
-	if err := validateListDescription(text); err != nil {
-		return fmt.Errorf("%w for %s: %w", ErrListUpdate, listURI, err)
+	record, _ := existing.Value.Val.(*bsky.GraphList)
+	updated, err := identity.update(record, listURI, description)
+	if err != nil || updated == nil {
+		return err
 	}
 	if existing.Cid == nil || *existing.Cid == "" {
 		return fmt.Errorf("managed list has no CID")
 	}
-	list.Name = title
-	list.Description = &text
 	if err := api.WaitWrite(ctx); err != nil {
 		return err
 	}
-	_, err = atproto.RepoPutRecord(ctx, api.Client, &atproto.RepoPutRecord_Input{Repo: owner, Collection: ListCollection, Rkey: key, Record: &lexutil.LexiconTypeDecoder{Val: list}, SwapRecord: existing.Cid})
+	_, err = atproto.RepoPutRecord(ctx, api.Client, &atproto.RepoPutRecord_Input{Repo: owner, Collection: ListCollection, Rkey: key, Record: &lexutil.LexiconTypeDecoder{Val: updated}, SwapRecord: existing.Cid})
 	api.ObserveWriteError(err)
 	if err != nil && ctx.Err() == nil && !XRPCCode(err, "InvalidSwap") && !XRPCCode(err, "RecordNotFound") && !XRPCCode(err, "RepoNotFound") {
 		return fmt.Errorf("%w for %s: %w", ErrListUpdate, listURI, err)
