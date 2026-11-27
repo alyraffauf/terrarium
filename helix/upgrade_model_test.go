@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/alyraffauf/terrarium/helix/storage"
+	"github.com/alyraffauf/terrarium/palustre"
 )
 
 func FuzzTypedUpgrade(f *testing.F) {
@@ -49,7 +50,7 @@ func FuzzTypedUpgrade(f *testing.F) {
 					t.Fatalf("host %d %q %v", i, host, err)
 				}
 			}
-			got, err := db.resumeCursor(t.Context(), "wss://jet.example"+streamPath)
+			got, err := db.ResumeCursor(t.Context(), "wss://jet.example"+palustre.StreamPath)
 			want := int64(seq)
 			if seq == 0 {
 				want = 5000000

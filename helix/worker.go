@@ -3,10 +3,12 @@ package helix
 import (
 	"context"
 	"errors"
-	"github.com/alyraffauf/terrarium/internal/followers"
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/alyraffauf/terrarium/internal/followers"
+	"github.com/alyraffauf/terrarium/palustre"
 )
 
 // The caller selects at most eight jobs. Public reads overlap, while the caller
@@ -20,7 +22,7 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 	}
 	if len(actors) == 0 {
 		// Keep live candidates queued while the worker waits for a list to recover.
-		pause(ctx, time.Second)
+		palustre.Pause(ctx, time.Second)
 		return ctx.Err()
 	}
 
@@ -55,7 +57,7 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 			// Never apply a stale exclusion snapshot to prefetched work.
 			if err := followers.RefreshSnapshot(ctx, db, api.Client, false); err != nil {
 				slog.Error("follow refresh failed", "error", err)
-				if !pause(ctx, 10*time.Second) {
+				if !palustre.Pause(ctx, 10*time.Second) {
 					return ctx.Err()
 				}
 				continue

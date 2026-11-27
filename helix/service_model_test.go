@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
-	m "github.com/alyraffauf/terrarium/internal/syncmodel"
 	"github.com/bluesky-social/indigo/xrpc"
+
+	"github.com/alyraffauf/terrarium/internal/followers"
+	m "github.com/alyraffauf/terrarium/internal/syncmodel"
 )
 
 func FuzzServiceMembership(f *testing.F) {
@@ -49,7 +51,7 @@ func FuzzServiceMembership(f *testing.F) {
 				target.suspended.Store(i == paused)
 				targets = append(targets, &target)
 			}
-			if err := db.ingest(ctx, did, checkpoint{}, false); err != nil {
+			if err := db.Ingest(ctx, did, followers.Checkpoint{}, false); err != nil {
 				return err
 			}
 			work := job{DID: did}
@@ -80,7 +82,7 @@ func TestOwnerChangeDuringMembershipWrite(t *testing.T) {
 	}
 	w := &m.World{Active: true, Follows: 1}
 	w.BeforeRecordRead = func() {
-		if err := db.ingest(ctx, "", checkpoint{}, true); err != nil {
+		if err := db.Ingest(ctx, "", followers.Checkpoint{}, true); err != nil {
 			t.Error(err)
 		}
 	}
@@ -150,7 +152,7 @@ func TestInterruptedRemovalAfterMigration(t *testing.T) {
 			}
 			defer db.Close()
 			w.RejectDelete = ""
-			if err := db.ingest(ctx, m.Subject, checkpoint{}, false); err != nil {
+			if err := db.Ingest(ctx, m.Subject, followers.Checkpoint{}, false); err != nil {
 				t.Fatal(err)
 			}
 		}

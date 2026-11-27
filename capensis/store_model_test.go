@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"github.com/alyraffauf/terrarium/internal/syncmodel"
 )
 
@@ -18,10 +19,10 @@ func FuzzDurableState(f *testing.F) {
 		ctx := t.Context()
 		return syncmodel.API{Store: db, Close: db.Close,
 			Event: func(d, e string, n, ts int64, dirty bool) error {
-				return db.ingest(ctx, d, checkpoint{Endpoint: e, Seq: n, TimeUS: ts}, dirty)
+				return db.Ingest(ctx, d, followers.Checkpoint{Endpoint: e, Seq: n, TimeUS: ts}, dirty)
 			},
-			Recover: func(e string, n int64) error { return db.recoverStream(ctx, e, n, "invalid") },
-			Cursor:  func(e string) (int64, error) { return db.resumeCursor(ctx, e) },
+			Recover: func(e string, n int64) error { return db.RecoverStream(ctx, e, n, "invalid") },
+			Cursor:  func(e string) (int64, error) { return db.ResumeCursor(ctx, e) },
 			Scan:    func(d string) error { return db.queueScan(ctx, d) },
 			Members: func(a string) error { return db.queueMembers(ctx, a) },
 			Next:    func() (syncmodel.Job, error) { j, e := db.next(ctx); return syncmodel.Job(j), e },
@@ -54,16 +55,16 @@ func TestEventCheckpointRollbackAndGapReset(t *testing.T) {
 	defer db.Close()
 	ctx := t.Context()
 	const ep = "wss://jet.example"
-	if err := db.ingest(ctx, "", checkpoint{Seq: 9, Endpoint: ep}, false); err != nil {
+	if err := db.Ingest(ctx, "", followers.Checkpoint{Seq: 9, Endpoint: ep}, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.conn.Exec("CREATE TRIGGER reject_checkpoint BEFORE UPDATE OF stream_seq ON sync_state BEGIN SELECT RAISE(ABORT,'injected'); END"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.ingest(ctx, "did:plc:new", checkpoint{Seq: 10, Endpoint: ep}, true); err == nil {
+	if err := db.Ingest(ctx, "did:plc:new", followers.Checkpoint{Seq: 10, Endpoint: ep}, true); err == nil {
 		t.Fatal("acknowledged uncommitted checkpoint")
 	}
-	if seq, err := db.resumeCursor(ctx, ep); err != nil || seq != 9 {
+	if seq, err := db.ResumeCursor(ctx, ep); err != nil || seq != 9 {
 		t.Fatalf("cursor %d %v", seq, err)
 	}
 	if _, err := db.next(ctx); !errors.Is(err, sql.ErrNoRows) {
@@ -75,16 +76,16 @@ func TestEventCheckpointRollbackAndGapReset(t *testing.T) {
 	if _, err := db.conn.Exec("DROP TRIGGER reject_checkpoint"); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.resetStream(ctx); err != nil {
+	if err := db.ResetStream(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if need, err := db.takeRescan(ctx); err != nil || !need {
 		t.Fatalf("rescan %t %v", need, err)
 	}
-	if err := db.ingest(ctx, "", checkpoint{Seq: 1, Endpoint: ep}, false); err != nil {
+	if err := db.Ingest(ctx, "", followers.Checkpoint{Seq: 1, Endpoint: ep}, false); err != nil {
 		t.Fatal(err)
 	}
-	if seq, err := db.resumeCursor(ctx, ep); err != nil || seq != 1 {
+	if seq, err := db.ResumeCursor(ctx, ep); err != nil || seq != 1 {
 		t.Fatalf("new cursor %d %v", seq, err)
 	}
 }

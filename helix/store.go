@@ -5,20 +5,16 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/alyraffauf/terrarium/internal/followers"
 	"time"
 
 	"github.com/alyraffauf/terrarium/helix/storage"
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"github.com/alyraffauf/terrarium/palustre"
 )
 
 type store struct {
 	conn    *sql.DB
 	queries *storage.Queries
-}
-type checkpoint struct {
-	TimeUS, Seq int64
-	Endpoint    string
 }
 type job struct {
 	DID        string
@@ -121,7 +117,7 @@ func (db *store) bind(ctx context.Context, key, value string) error {
 		return nil
 	})
 }
-func (db *store) owner(ctx context.Context) (string, error) {
+func (db *store) Owner(ctx context.Context) (string, error) {
 	return db.queries.GetBinding(ctx, "owner")
 }
 func (db *store) initializeCursor(ctx context.Context) error {
@@ -136,7 +132,7 @@ func (db *store) takeRescan(ctx context.Context) (bool, error) {
 }
 
 // Event work and its checkpoint commit together, including follow invalidation.
-func (db *store) ingest(ctx context.Context, did string, position checkpoint, followChanged bool) error {
+func (db *store) Ingest(ctx context.Context, did string, position followers.Checkpoint, followChanged bool) error {
 	return db.transaction(ctx, func(queries *storage.Queries) error {
 		if followChanged {
 			if err := queries.DirtyFollows(ctx); err != nil {
@@ -154,7 +150,7 @@ func (db *store) ingest(ctx context.Context, did string, position checkpoint, fo
 		return queries.SaveCheckpoint(ctx, storage.SaveCheckpointParams{CursorUs: position.TimeUS, Seq: position.Seq, Endpoint: position.Endpoint})
 	})
 }
-func (db *store) resumeCursor(ctx context.Context, endpoint string) (int64, error) {
+func (db *store) ResumeCursor(ctx context.Context, endpoint string) (int64, error) {
 	state, err := db.queries.GetState(ctx)
 	if err != nil {
 		return 0, err
@@ -164,10 +160,10 @@ func (db *store) resumeCursor(ctx context.Context, endpoint string) (int64, erro
 	}
 	return max(0, state.CursorUs-5_000_000), nil
 }
-func (db *store) resetStream(ctx context.Context) error {
+func (db *store) ResetStream(ctx context.Context) error {
 	return db.queries.ResetStream(ctx, time.Now().Add(-time.Minute).UnixMicro())
 }
-func (db *store) recoverStream(ctx context.Context, endpoint string, seq int64, frame string) error {
+func (db *store) RecoverStream(ctx context.Context, endpoint string, seq int64, frame string) error {
 	return db.queries.RecoverStream(ctx, storage.RecoverStreamParams{StreamSeq: seq, StreamEndpoint: endpoint, InvalidFrame: frame})
 }
 func (db *store) next(ctx context.Context) (job, error) {

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/alyraffauf/terrarium/internal/followers"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/gofrs/flock"
 
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"github.com/alyraffauf/terrarium/palustre"
 )
 
@@ -69,7 +69,8 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	collectorError := make(chan error, 1)
 	go func() {
 		defer workers.Done()
-		if err := collect(ctx, cfg, db); err != nil {
+		collector := followers.Collector{Store: db, Endpoint: cfg.Jetstream, SelectCandidate: selectCandidate}
+		if err := collector.Run(ctx); err != nil {
 			collectorError <- err
 			slog.Error("Jetstream collection failed", "error", err)
 			cancel()
@@ -100,7 +101,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		}
 		if err := api.Refresh(ctx); err != nil {
 			slog.Error("session refresh failed", "error", err)
-			if !pause(ctx, time.Minute) {
+			if !palustre.Pause(ctx, time.Minute) {
 				break
 			}
 			continue
@@ -108,7 +109,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		forceFollowRefresh := !time.Now().Before(nextFollows)
 		if err := followers.RefreshSnapshot(ctx, db, api.Client, forceFollowRefresh); err != nil {
 			slog.Error("follow refresh failed", "error", err)
-			if !pause(ctx, 10*time.Second) {
+			if !palustre.Pause(ctx, 10*time.Second) {
 				break
 			}
 			continue
@@ -122,7 +123,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 
 		work, err := db.next(ctx)
 		if errors.Is(err, sql.ErrNoRows) {
-			if !pause(ctx, time.Second) {
+			if !palustre.Pause(ctx, time.Second) {
 				break
 			}
 			continue

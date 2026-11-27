@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/alyraffauf/terrarium/internal/followers"
 	m "github.com/alyraffauf/terrarium/internal/syncmodel"
 )
 
@@ -38,7 +39,8 @@ func FuzzStreamRouting(f *testing.F) {
 			}
 			payload := []byte(fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#%s","did":%q,"seq":%d,"time":"2026-01-01T00:00:00Z","collection":%q,"operation":"create","rkey":"ok","record":{"$type":"app.bsky.graph.follow","subject":%q}}}`, kind, did, i+1, collection, subject))
 			save := b&32 != 0
-			err = ingestFrame(ctx, db, "wss://jet.example", m.Owner, payload, save)
+			collector := followers.Collector{Store: db, Endpoint: "wss://jet.example", SelectCandidate: selectCandidate}
+			err = collector.IngestFrame(ctx, m.Owner, payload, save)
 			queued := kind == "sync" || kind == "account" || kind == "identity" || b%8 == 5
 			if err != nil {
 				t.Fatal(err)
@@ -50,7 +52,7 @@ func FuzzStreamRouting(f *testing.F) {
 			if queued || dirty || save || kind == "broken" {
 				cursor = int64(i + 1)
 			}
-			if got, err := db.resumeCursor(ctx, "wss://jet.example"); err != nil || got != cursor {
+			if got, err := db.ResumeCursor(ctx, "wss://jet.example"); err != nil || got != cursor {
 				t.Fatalf("frame %d cursor %d want %d %v", i, got, cursor, err)
 			}
 			if got, _, err := db.FollowVersions(ctx); err != nil || got != version {

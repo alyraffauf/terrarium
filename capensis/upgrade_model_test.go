@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	m "github.com/alyraffauf/terrarium/internal/syncmodel"
+	"github.com/alyraffauf/terrarium/palustre"
 )
 
 func FuzzLegacyUpgrade(f *testing.F) {
@@ -50,7 +51,7 @@ func FuzzLegacyUpgrade(f *testing.F) {
 					t.Fatalf("member %d keys %v %v", i, keys, err)
 				}
 			}
-			got, err := current.resumeCursor(ctx, "wss://jet.example"+streamPath)
+			got, err := current.ResumeCursor(ctx, "wss://jet.example"+palustre.StreamPath)
 			want := int64(seq)
 			if seq == 0 {
 				want = 5000000
