@@ -30,9 +30,15 @@ type manifest struct {
 	Kind string
 	Spec struct {
 		Ports    []port
+		Selector struct {
+			MatchLabels map[string]any `yaml:"matchLabels"`
+		}
 		Template struct {
-			Metadata struct{ Annotations map[string]string }
-			Spec     struct{ Containers []container }
+			Metadata struct {
+				Annotations map[string]string
+				Labels      map[string]any
+			}
+			Spec struct{ Containers []container }
 		}
 	}
 }
@@ -43,7 +49,7 @@ func render(t *testing.T, app string, values map[string]any) (map[string]manifes
 	if helm == "" {
 		helm = "helm"
 	}
-	cmd := exec.CommandContext(t.Context(), helm, "template", "check", "../../"+app+"/charts/"+app, "--values", "-")
+	cmd := exec.CommandContext(t.Context(), helm, "template", "null", "../../"+app+"/charts/"+app, "--values", "-")
 	data, err := json.Marshal(values)
 	if err != nil {
 		t.Fatal(err)
@@ -91,6 +97,11 @@ func TestRenderedDaemonArguments(t *testing.T) {
 					t.Fatal(err)
 				}
 				deploy := docs["Deployment"]
+				for _, labels := range []map[string]any{deploy.Spec.Selector.MatchLabels, deploy.Spec.Template.Metadata.Labels} {
+					if got := labels["app.kubernetes.io/instance"]; got != "null" {
+						t.Errorf("expected string instance label %q, got %#v", "null", got)
+					}
+				}
 				if len(deploy.Spec.Template.Spec.Containers) != 1 {
 					t.Fatal("expected one daemon")
 				}
