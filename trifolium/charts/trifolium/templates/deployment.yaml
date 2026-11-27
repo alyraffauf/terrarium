@@ -1,6 +1,9 @@
 {{- if and (empty .Values.accounts) (empty .Values.clusters) }}
 {{- fail "configure accounts or clusters" }}
 {{- end }}
+{{- if and .Values.accounts (hasKey .Values.clusters "default") }}
+{{- fail "accounts and clusters.default both configure the default cluster" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

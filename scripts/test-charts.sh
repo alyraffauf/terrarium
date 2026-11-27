@@ -23,6 +23,12 @@ check_no_garbled_format cordata --set identifier=you.example.com --set existingS
 if $HELM template rel ./cordata/charts/cordata --set identifier=you.example.com --set existingSecret=x >/dev/null 2>&1; then
   echo "FAIL cordata rendered without post"; fail=1
 fi
+check_no_garbled_format trifolium --set identifier=a.example --set existingSecret=x --set 'accounts[0]=a.example'
+check_no_garbled_format trifolium --set identifier=a.example --set existingSecret=x --set 'clusters.garden.accounts[0]=a.example' --set clusters.garden.threshold=1
+check_no_garbled_format trifolium --set identifier=a.example --set existingSecret=x --set 'accounts[0]=a.example' --set 'clusters.garden.accounts[0]=b.example' --set clusters.garden.threshold=1
+if $HELM template rel ./trifolium/charts/trifolium --set identifier=a.example --set existingSecret=x --set 'accounts[0]=a.example' --set 'clusters.default.accounts[0]=b.example' --set clusters.default.threshold=1 >/dev/null 2>&1; then
+  echo "FAIL trifolium rendered two default clusters"; fail=1
+fi
 # Metrics wiring must agree on the port across Service, container, annotation.
 rendered="$($HELM template rel ./helix/charts/helix --set identifier=you.example.com --set existingSecret=x --set 'accounts[0]=a.example' --set metrics.enabled=true --set metrics.port=8080)"
 for want in 'containerPort: 8080' '--metrics-address=:8080' 'port: 8080' 'prometheus.io/port: "8080"'; do
