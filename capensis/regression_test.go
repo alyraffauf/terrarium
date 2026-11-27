@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/xrpc"
+
+	"github.com/alyraffauf/terrarium/palustre"
 )
 
 func TestRescansPreserveQueueAndBackoff(t *testing.T) {
@@ -142,7 +145,7 @@ func TestInvalidEventRecoveryDoesNotSkipStorageFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	frame := []byte(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#identity","seq":11,"did":"invalid","time":"invalid"}}`)
-	if err := ingestFrame(ctx, db, "stream", ownerDID, frame); err != nil {
+	if err := ingestFrame(ctx, db, "stream", ownerDID, frame, true); err != nil {
 		t.Fatal(err)
 	}
 	cursor, err := db.resumeCursor(ctx, "stream")
@@ -157,7 +160,7 @@ func TestInvalidEventRecoveryDoesNotSkipStorageFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	frame = []byte(fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#identity","seq":12,"did":%q,"time":"2026-01-01T00:00:00Z"}}`, testDID))
-	if err := ingestFrame(ctx, db, "stream", ownerDID, frame); err == nil {
+	if err := ingestFrame(ctx, db, "stream", ownerDID, frame, true); err == nil {
 		t.Fatal("storage failure swallowed")
 	}
 	cursor, err = db.resumeCursor(ctx, "stream")
@@ -368,11 +371,64 @@ func TestFollowSnapshotPreservesConcurrentInvalidation(t *testing.T) {
 	if err := db.ingest(ctx, "", checkpoint{TimeUS: 100}, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.applyFollowSnapshot(ctx, version, map[string]bool{testDID: true}); err != nil {
-		t.Fatal(err)
+	if err := db.applyFollowSnapshot(ctx, version, map[string]bool{testDID: true}); !errors.Is(err, errFollowSnapshotSuperseded) {
+		t.Fatalf("superseded exclusion refresh returned %v", err)
+	}
+	if excluded, err := db.isFollowed(ctx, testDID); err != nil || excluded {
+		t.Fatalf("superseded exclusion refresh installed its results: %t %v", excluded, err)
 	}
 	current, applied, err := db.followVersion(ctx)
 	if err != nil || current == applied {
 		t.Fatalf("concurrent follow event lost: %d %d %v", current, applied, err)
 	}
+}
+
+func TestRejectedListPausesMembershipAndLeavesNewBindingUnset(t *testing.T) {
+	db := testStore(t)
+	ctx := context.Background()
+	const pds = "https://first.example"
+	uri := "at://" + ownerDID + "/" + listCollection + "/list"
+	managed := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path != "/xrpc/com.atproto.repo.getRecord" || r.URL.Query().Get("collection") != listCollection {
+			t.Errorf("paused list allowed an unexpected request: %s", r.URL)
+			http.Error(w, `{"error":"UnexpectedRequest"}`, http.StatusBadRequest)
+			return
+		}
+		name, description := "Unrelated list", "Managed by someone else"
+		if managed {
+			name, description = palustre.ListTitle(uri), listName(pds)
+		}
+		fmt.Fprintf(w, `{"value":{"$type":%q,"name":%q,"description":%q,"purpose":"app.bsky.graph.defs#modlist","createdAt":"2026-01-01T00:00:00Z"}}`, listCollection, name, description)
+	}))
+	defer server.Close()
+	api := newSession(Config{Targets: []Target{{PDS: pds, ListURI: uri}}}, server.Client(), &xrpc.Client{Host: server.URL, Client: server.Client(), Auth: &xrpc.AuthInfo{Did: ownerDID}})
+	targets, err := api.prepareTargets(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := targets[0]
+	assertPaused := func() {
+		t.Helper()
+		if err := target.checkList(ctx, db); !errors.Is(err, palustre.ErrUnrelatedList) {
+			t.Fatalf("unexpected list check result: %v", err)
+		}
+		if err := target.reconcileSubject(ctx, subjectState{did: testDID}, db); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertPaused()
+	if _, err := db.queries.GetList(ctx, pds); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rejected list has a saved binding: %v", err)
+	}
+	managed = true
+	if err := target.checkList(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	if bound, err := db.queries.GetList(ctx, pds); err != nil || bound != uri {
+		t.Fatalf("verified binding missing: %q %v", bound, err)
+	}
+	managed = false
+	assertPaused()
 }

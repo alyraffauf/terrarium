@@ -66,30 +66,52 @@ func (db *store) bindList(ctx context.Context, target Target, owner string) (str
 func (db *store) bindLists(ctx context.Context, targets []Target, owner string) ([]string, error) {
 	var uris []string
 	err := db.transaction(ctx, func(queries *storage.Queries) error {
-		for _, target := range targets {
-			uri, err := queries.GetList(ctx, target.PDS)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				return err
+		var err error
+		uris, err = planLists(ctx, queries, targets, owner)
+		if err != nil {
+			return err
+		}
+		for i, target := range targets {
+			if err := queries.BindList(ctx, storage.BindListParams{Pds: target.PDS, ListUri: uris[i]}); err != nil {
+				return fmt.Errorf("bind %s to %s: %w", target.PDS, uris[i], err)
 			}
-			if uri != "" {
-				if target.ListURI != "" && target.ListURI != uri {
-					return fmt.Errorf("%s is already bound to %s", target.PDS, uri)
-				}
-			} else {
-				uri = target.ListURI
-				if uri == "" {
-					uri = "at://" + owner + "/" + listCollection + "/" + recordKey(target.PDS)
-				}
-				if err := queries.BindList(ctx, storage.BindListParams{Pds: target.PDS, ListUri: uri}); err != nil {
-					return fmt.Errorf("bind %s to %s: %w", target.PDS, uri, err)
-				}
-			}
-			uris = append(uris, uri)
 		}
 		return nil
 	})
 	return uris, err
 }
+
+func planLists(ctx context.Context, queries *storage.Queries, targets []Target, owner string) ([]string, error) {
+	uris := make([]string, 0, len(targets))
+	seen := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		saved, err := queries.GetList(ctx, target.PDS)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		uri := target.ListURI
+		if saved != "" {
+			if uri != "" && uri != saved {
+				return nil, fmt.Errorf("%s is already bound to %s", target.PDS, saved)
+			}
+			uri = saved
+		}
+		if uri == "" {
+			uri = "at://" + owner + "/" + listCollection + "/" + recordKey(target.PDS)
+		}
+		boundTarget, err := queries.GetListTarget(ctx, uri)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if seen[uri] || (boundTarget != "" && boundTarget != target.PDS) {
+			return nil, fmt.Errorf("list %s is already bound to another target", uri)
+		}
+		seen[uri] = true
+		uris = append(uris, uri)
+	}
+	return uris, nil
+}
+
 func (db *store) bind(ctx context.Context, key, value string) error {
 	return db.transaction(ctx, func(queries *storage.Queries) error {
 		if err := queries.SetBinding(ctx, storage.SetBindingParams{Key: key, Value: value}); err != nil {
@@ -185,8 +207,18 @@ func (db *store) followVersion(ctx context.Context) (version, applied int64, err
 	state, err := db.queries.GetState(ctx)
 	return state.FollowVersion, state.FollowApplied, err
 }
+
+var errFollowSnapshotSuperseded = errors.New("owner follows changed during refresh")
+
 func (db *store) applyFollowSnapshot(ctx context.Context, version int64, follows map[string]bool) error {
 	return db.transaction(ctx, func(queries *storage.Queries) error {
+		state, err := queries.GetState(ctx)
+		if err != nil {
+			return err
+		}
+		if state.FollowVersion != version {
+			return errFollowSnapshotSuperseded
+		}
 		if err := queries.ClearNewFollows(ctx); err != nil {
 			return err
 		}

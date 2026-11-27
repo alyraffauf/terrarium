@@ -29,7 +29,7 @@ func TestDeletedAccountEventRemovesAllListsAfterRestartAndRetry(t *testing.T) {
 		}
 	}
 	payload := fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#account","did":%q,"seq":100,"time":"2026-11-16T00:00:00Z","account":{"did":%q,"active":false,"status":"deleted","seq":900,"time":"2026-11-16T00:00:00Z"}}}`, testDID, testDID)
-	if err := ingestFrame(ctx, db, "wss://jetstream.example", ownerDID, []byte(payload)); err != nil {
+	if err := ingestFrame(ctx, db, "wss://jetstream.example", ownerDID, []byte(payload), true); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -40,6 +40,9 @@ func TestDeletedAccountEventRemovesAllListsAfterRestartAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
+	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
 	work, err := db.next(ctx)
 	if err != nil || work.DID != testDID {
 		t.Fatalf("deletion event lost across restart: %+v %v", work, err)
@@ -141,7 +144,7 @@ func TestFormerHostDeletionKeepsActiveMigratedAccount(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#account","did":%q,"seq":101,"time":"2026-11-16T00:00:00Z","account":{"did":%q,"active":false,"status":"deleted","seq":901,"time":"2026-11-16T00:00:00Z"}}}`, testDID, testDID)
-	if err := ingestFrame(ctx, db, "wss://jetstream.example", ownerDID, []byte(payload)); err != nil {
+	if err := ingestFrame(ctx, db, "wss://jetstream.example", ownerDID, []byte(payload), true); err != nil {
 		t.Fatal(err)
 	}
 	work, err := db.next(ctx)

@@ -340,8 +340,8 @@ func TestStreamQueuesIdentityAndOwnerFollowChanges(t *testing.T) {
 		}
 		messages := []string{
 			fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#identity","did":%q,"seq":31,"time":"1970-01-01T00:00:10.000001Z"}}`, testDID),
-			fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","did":%q,"seq":32,"time":"1970-01-01T00:00:10.000002Z","collection":"app.bsky.graph.follow","operation":"delete"}}`, ownerDID),
-			fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","did":%q,"seq":33,"time":"1970-01-01T00:00:10.000003Z","collection":"app.bsky.graph.follow","operation":"create"}}`, testDID),
+			fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","did":%q,"seq":32,"time":"1970-01-01T00:00:10.000002Z","collection":"app.bsky.graph.follow","operation":"delete","rkey":"follow-key"}}`, ownerDID),
+			fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#commit","did":%q,"seq":33,"time":"1970-01-01T00:00:10.000003Z","collection":"app.bsky.graph.follow","operation":"create","rkey":"follow-key","record":{"$type":"app.bsky.graph.follow","subject":%q}}}`, testDID, ownerDID),
 		}
 		for _, message := range messages {
 			if err := conn.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
@@ -385,12 +385,12 @@ func TestStreamGapAndWitnessedTimestamp(t *testing.T) {
 		`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#info","name":"OutdatedCursor"}}`,
 		`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#info","name":"FutureCursor"}}`,
 	} {
-		if err := ingestFrame(ctx, db, "wss://test", ownerDID, []byte(payload)); !errors.Is(err, errStreamGap) {
+		if err := ingestFrame(ctx, db, "wss://test", ownerDID, []byte(payload), true); !errors.Is(err, errStreamGap) {
 			t.Fatalf("gap not detected: %v", err)
 		}
 	}
 	payload := fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#sync","did":%q,"seq":45,"time":"2026-01-01T00:00:00Z","witnessedAt":"2026-11-16T00:00:00Z"}}`, ownerDID)
-	if err := ingestFrame(ctx, db, "wss://test", ownerDID, []byte(payload)); err != nil {
+	if err := ingestFrame(ctx, db, "wss://test", ownerDID, []byte(payload), true); err != nil {
 		t.Fatal(err)
 	}
 	resumed, err := db.resumeCursor(ctx, "wss://other")

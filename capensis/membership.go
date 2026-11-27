@@ -2,7 +2,9 @@ package capensis
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -20,12 +22,25 @@ type listTarget struct {
 	rescanInterval time.Duration
 	target         *xrpc.Client
 	listURI        string
+	paused         atomic.Bool
 }
 
 var recordKey = palustre.RecordKey
 
 func (api *listTarget) ensureList(ctx context.Context) error {
 	return api.EnsureList(ctx, api.listURI, listName(api.pds))
+}
+
+func (api *listTarget) checkList(ctx context.Context, db *store) error {
+	api.paused.Store(true)
+	if err := api.ensureList(ctx); err != nil {
+		return err
+	}
+	if _, err := db.bindList(ctx, Target{PDS: api.pds, ListURI: api.listURI}, api.Client.Auth.Did); err != nil {
+		return err
+	}
+	api.paused.Store(false)
+	return nil
 }
 
 func (api *listTarget) refreshListIcon(ctx context.Context) {
@@ -53,6 +68,9 @@ func (api *listTarget) belongs(ctx context.Context, did string, resolved resolut
 	if err != nil {
 		return false, err
 	}
+	if status.Did != did {
+		return false, fmt.Errorf("repository status DID does not match %s", did)
+	}
 	if !status.Active {
 		return false, nil
 	}
@@ -63,9 +81,10 @@ func (api *listTarget) belongs(ctx context.Context, did string, resolved resolut
 }
 
 type subjectState struct {
-	did      string
-	excluded bool
-	resolved resolution
+	did         string
+	excluded    bool
+	beforeWrite func(context.Context) error
+	resolved    resolution
 }
 
 func (api *listTarget) reconcile(ctx context.Context, work job, db *store) error {
@@ -76,6 +95,9 @@ func (api *listTarget) reconcile(ctx context.Context, work job, db *store) error
 	return api.reconcileSubject(ctx, subject, db)
 }
 func (api *listTarget) reconcileSubject(ctx context.Context, subject subjectState, db *store) error {
+	if api.paused.Load() {
+		return nil
+	}
 	var err error
 	belongs := false
 	if !subject.excluded {
@@ -85,5 +107,5 @@ func (api *listTarget) reconcileSubject(ctx context.Context, subject subjectStat
 		}
 	}
 
-	return api.Reconcile(ctx, db, palustre.Membership{Target: api.pds, ListURI: api.listURI, DID: subject.did, Include: belongs})
+	return api.Reconcile(ctx, db, palustre.Membership{Target: api.pds, ListURI: api.listURI, DID: subject.did, Include: belongs, BeforeWrite: subject.beforeWrite})
 }

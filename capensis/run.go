@@ -16,7 +16,6 @@ import (
 	"github.com/gofrs/flock"
 
 	"github.com/alyraffauf/terrarium/palustre"
-	"github.com/alyraffauf/terrarium/palustre/listlex"
 )
 
 func Run(ctx context.Context, cfg Config) (result error) {
@@ -53,12 +52,9 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	if err != nil {
 		return err
 	}
+	inventory := &inventoryScan{checks: make(map[string]time.Time)}
 	for _, target := range targets {
-		if err := target.ensureList(ctx); err != nil {
-			return err
-		}
-		target.refreshListIcon(ctx)
-		slog.Info("maintaining list", "pds", target.pds, "uri", target.listURI, "name", palustre.ListTitle(target.listURI))
+		inventory.checkTarget(ctx, target, db)
 	}
 	if err := db.initializeCursor(ctx); err != nil {
 		return err
@@ -68,10 +64,11 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	var workers sync.WaitGroup
 	workers.Add(2)
 	rescan := make(chan struct{}, 1)
+	inventory.rescan = rescan
 	collectorError := make(chan error, 1)
 	go func() {
 		defer workers.Done()
-		if err := collect(ctx, cfg, db, rescan); err != nil {
+		if err := collect(ctx, cfg, db); err != nil {
 			collectorError <- err
 			slog.Error("Jetstream collection failed", "error", err)
 			cancel()
@@ -88,7 +85,6 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		}
 	}()
 	// Authenticated operations have one owner, keeping token refresh serialized.
-	inventory := &inventoryScan{}
 	nextFollows := time.Time{}
 	for ctx.Err() == nil {
 		requested, err := db.takeRescan(ctx)
@@ -108,14 +104,15 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			}
 			continue
 		}
-		if err := api.syncFollows(ctx, db, time.Now().After(nextFollows)); err != nil {
+		forceFollowRefresh := !time.Now().Before(nextFollows)
+		if err := api.syncFollows(ctx, db, forceFollowRefresh); err != nil {
 			slog.Error("follow refresh failed", "error", err)
 			if !pause(ctx, 10*time.Second) {
 				break
 			}
 			continue
 		}
-		if time.Now().After(nextFollows) {
+		if forceFollowRefresh {
 			nextFollows = time.Now().Add(5 * time.Minute)
 		}
 		if err := inventory.step(ctx, targets, db); err != nil {
@@ -136,6 +133,9 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			return err
 		}
 		if err := reconcileTargets(ctx, targets, work, db); err != nil {
+			if errors.Is(err, errFollowSnapshotSuperseded) {
+				continue
+			}
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -189,7 +189,16 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 		if err != nil {
 			return err
 		}
+		if page.Repos == nil {
+			return fmt.Errorf("PDS response has no repos array")
+		}
 		for _, repo := range page.Repos {
+			if repo == nil {
+				return fmt.Errorf("PDS response includes a null repository")
+			}
+			if _, err := syntax.ParseDID(repo.Did); err != nil {
+				return err
+			}
 			if err := db.queueScan(ctx, repo.Did); err != nil {
 				return err
 			}
@@ -216,7 +225,7 @@ func (api *session) prepareTargets(ctx context.Context, db *store) ([]*listTarge
 		}
 	}
 	var targets []*listTarget
-	uris, err := db.bindLists(ctx, api.cfg.Targets, api.Client.Auth.Did)
+	uris, err := planLists(ctx, db.queries, api.cfg.Targets, api.Client.Auth.Did)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +243,9 @@ func reconcileTargets(ctx context.Context, targets []*listTarget, work job, db *
 	subject, err := targets[0].subject(ctx, db, work.DID)
 	if err != nil {
 		return err
+	}
+	if subject.did != targets[0].Client.Auth.Did {
+		subject.beforeWrite = db.checkFollowSnapshot
 	}
 	var failures []error
 	for _, target := range targets {
@@ -254,25 +266,41 @@ type inventoryScan struct {
 	next   time.Time
 	lists  map[string]*listTarget
 	checks map[string]time.Time
+	rescan chan<- struct{}
 	seen   map[string]bool
+}
+
+func (scan *inventoryScan) checkTarget(ctx context.Context, target *listTarget, db *store) {
+	delay := target.rescanInterval
+	if err := target.checkList(ctx, db); err != nil {
+		slog.Error("list check failed", "pds", target.pds, "error", err)
+		delay = time.Minute
+	} else {
+		target.refreshListIcon(ctx)
+		slog.Info("maintaining list", "pds", target.pds, "uri", target.listURI, "name", palustre.ListTitle(target.listURI))
+	}
+	scan.checks[target.listURI] = time.Now().Add(delay)
 }
 
 func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *store) error {
 	if scan.checks == nil {
 		scan.checks = map[string]time.Time{}
 	}
-	for _, api := range targets {
-		if time.Now().Before(scan.checks[api.listURI]) {
+	for _, target := range targets {
+		if time.Now().Before(scan.checks[target.listURI]) {
 			continue
 		}
-		delay := api.rescanInterval
-		if err := api.ensureList(ctx); err != nil {
-			slog.Error("list check failed", "pds", api.pds, "error", err)
-			delay = time.Minute
-		} else {
-			api.refreshListIcon(ctx)
+		wasPaused := target.paused.Load()
+		scan.checkTarget(ctx, target, db)
+		if wasPaused && !target.paused.Load() {
+			select {
+			case scan.rescan <- struct{}{}:
+			default:
+			}
+			scan.cursor = ""
+			scan.lists = nil
+			scan.next = time.Time{}
 		}
-		scan.checks[api.listURI] = time.Now().Add(delay)
 	}
 	if scan.lists == nil {
 		if time.Now().Before(scan.next) {
@@ -281,44 +309,32 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 		scan.lists = map[string]*listTarget{}
 		scan.seen = map[string]bool{}
 		for _, api := range targets {
-			scan.lists[api.listURI] = api
+			if !api.paused.Load() {
+				scan.lists[api.listURI] = api
+			}
+		}
+		if len(scan.lists) == 0 {
+			scan.lists = nil
+			scan.seen = nil
+			return nil
 		}
 	}
 
 	api := targets[0]
-	page, err := atproto.RepoListRecords(ctx, api.Client, itemCollection, scan.cursor, 100, api.Client.Auth.Did, false)
-	if err == nil {
-		for _, record := range page.Records {
-			if record == nil || record.Value == nil {
-				continue
-			}
-			item, ok := record.Value.Val.(*listlex.GraphListitem)
-			if !ok {
-				continue
-			}
-			target := scan.lists[item.List]
-			if target == nil {
-				continue
-			}
-			uri, e := syntax.ParseATURI(record.Uri)
-			if e != nil {
-				err = e
-				break
-			}
-			if e = db.RememberMember(ctx, target.pds, item.Subject, uri.RecordKey().String()); e != nil {
-				err = e
-				break
-			}
-			if e = db.queueScan(ctx, item.Subject); e != nil {
-				err = e
-				break
-			}
+	next, err := palustre.ListItemPage(ctx, api.Client, scan.cursor, func(list, did, key string) error {
+		target := scan.lists[list]
+		if target == nil || target.paused.Load() {
+			return nil
 		}
-	}
-	if err == nil && page.Cursor != nil && *page.Cursor != "" {
-		if !scan.seen[*page.Cursor] {
-			scan.seen[*page.Cursor] = true
-			scan.cursor = *page.Cursor
+		if err := db.RememberMember(ctx, target.pds, did, key); err != nil {
+			return err
+		}
+		return db.queueScan(ctx, did)
+	})
+	if err == nil && next != "" {
+		if !scan.seen[next] {
+			scan.seen[next] = true
+			scan.cursor = next
 			return nil
 		}
 		err = fmt.Errorf("list inventory repeated pagination cursor")
@@ -336,6 +352,10 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 
 func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.Time, now time.Time) {
 	for i, api := range targets {
+		if api.paused.Load() {
+			next[i] = now.Add(time.Minute)
+			continue
+		}
 		if now.Before(next[i]) {
 			continue
 		}
