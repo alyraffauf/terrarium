@@ -46,3 +46,9 @@ CI tests Go code, checks all four Nix packages and generated files, and builds a
 [Renovate](renovate.json) covers Go modules, flake inputs, GitHub Actions, and Docker images. Enable Renovate for the repository to receive update PRs. After Go dependency changes, build all four Nix packages and update the shared `vendorHash` in `flake-module.nix` if Nix reports a mismatch.
 
 [MIT license](LICENSE).
+
+## Property tests and fuzzing
+
+Run `go test ./...` to replay the checked-in seeds. Run `nix develop -c ./scripts/fuzz.sh` to generate new cases for every native Go fuzz target. Set `FUZZTIME=30s` for 30 seconds per target, or `FUZZTIME=1000x` for a fixed number of executions. `FUZZWORKERS` controls parallel workers per target and defaults to two. Run the Helm deployment contracts with `nix develop -c ./scripts/test-charts.sh`.
+
+When Go finds a failure, it writes a minimized input under the affected package's `testdata/fuzz/` directory and prints the command to replay it. Keep confirmed failing cases with the fix.
