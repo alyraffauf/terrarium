@@ -1,0 +1,215 @@
+package helix
+
+import (
+	"context"
+	"net/http"
+	"testing"
+	"time"
+
+	m "github.com/alyraffauf/terrarium/internal/syncmodel"
+	"github.com/bluesky-social/indigo/xrpc"
+)
+
+func FuzzServiceMembership(f *testing.F) {
+	m.Service(f, false, func(t *testing.T, w *m.World) func(string, bool, int, bool) error {
+		path := t.TempDir() + "/store"
+		db, err := openStore(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { db.Close() })
+		client := &http.Client{Transport: w}
+		owner := &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}}
+		api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, owner)
+		return func(did string, excluded bool, paused int, restart bool) error {
+			if restart {
+				if err := db.Close(); err != nil {
+					return err
+				}
+				db, err = openStore(path)
+				if err != nil {
+					return err
+				}
+			}
+			ctx := t.Context()
+			following := map[string]bool{}
+			if excluded {
+				following[m.Subject] = true
+			}
+			if err := db.applyFollowSnapshot(ctx, 0, following); err != nil {
+				return err
+			}
+			var targets []*listTarget
+			for i := range 2 {
+				target := listTarget{session: api, actor: m.Actors[i], listURI: m.List(i)}
+				target.suspended.Store(i == paused)
+				targets = append(targets, &target)
+			}
+			if err := db.ingest(ctx, did, checkpoint{}, false); err != nil {
+				return err
+			}
+			work := job{DID: did}
+			if err := db.conn.QueryRow("SELECT generation FROM pending WHERE did=?", did).Scan(&work.Generation); err != nil {
+				return err
+			}
+			return processBatch(ctx, targets, []job{work}, db)
+		}
+	})
+}
+
+func TestOwnerChangeDuringMembershipWrite(t *testing.T) {
+	db, err := openStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := t.Context()
+	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.queueScan(ctx, m.Subject); err != nil {
+		t.Fatal(err)
+	}
+	work, err := db.next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := &m.World{Active: true, Follows: 1}
+	w.BeforeRecordRead = func() {
+		if err := db.ingest(ctx, "", checkpoint{}, true); err != nil {
+			t.Error(err)
+		}
+	}
+	client := &http.Client{Transport: w}
+	api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+	target := &listTarget{actor: m.Actors[0], session: api, listURI: m.List(0)}
+	if err := processBatch(ctx, []*listTarget{target}, []job{work}, db); err != nil {
+		t.Fatal(err)
+	}
+	if w.BeforeRecordRead != nil || w.RecordCount() != 0 {
+		t.Fatal("expected owner invalidation before write")
+	}
+	next, err := db.next(ctx)
+	if err != nil || next != work {
+		t.Fatalf("deferred job %+v want %+v %v", next, work, err)
+	}
+}
+
+func TestInterruptedRemovalAfterMigration(t *testing.T) {
+	path := t.TempDir() + "/db"
+	db, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	w := &m.World{Unresolved: true, RejectDelete: "old"}
+	client := &http.Client{Transport: w}
+	api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.saveCandidatePDS(ctx, m.Subject, m.Hosts[0]); err != nil {
+		t.Fatal(err)
+	}
+	keys := []string{"old", "new"}
+	var targets []*listTarget
+	for i, key := range keys {
+		id := m.Actors[i]
+		target := &listTarget{session: api, actor: id, listURI: m.List(i)}
+		targets = append(targets, target)
+		w.SeedItem(key, m.List(i), m.Subject)
+		if err := db.RememberMember(ctx, id, m.Subject, key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.queueScan(ctx, m.Subject); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 2 {
+		work, err := db.next(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := processBatch(ctx, targets, []job{work}, db); err != nil {
+			t.Fatal(err)
+		}
+		if attempt == 0 {
+			if w.Record("old") == nil || w.Record("new") != nil {
+				t.Fatal("healthy target failed to progress independently")
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = openStore(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			w.RejectDelete = ""
+			if err := db.ingest(ctx, m.Subject, checkpoint{}, false); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if w.RecordCount() != 0 {
+		t.Fatal("retry retained deleted subject")
+	}
+}
+
+func TestBatchProgressWhileResolverStalls(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	db, err := openStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.applyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	stalled := make(chan struct{})
+	released := make(chan struct{})
+	slow := m.Actors[1]
+	w := &m.World{Active: true, Follows: 1}
+	w.BeforeResolve = func(r *http.Request) error {
+		if r.URL.Query().Get("identifier") == slow {
+			close(stalled)
+			select {
+			case <-released:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		select {
+		case <-stalled:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	w.AfterCreate = func(did string) {
+		if did == m.Subject {
+			// A fresh exclusion arrives while the slower job is fetching public state.
+			if err := db.applyFollowSnapshot(ctx, 0, map[string]bool{slow: true}); err != nil {
+				t.Error(err)
+			}
+			close(released)
+		}
+	}
+	client := &http.Client{Transport: w}
+	api := newSession(Config{Slingshot: "https://resolver.example", WriteInterval: time.Nanosecond}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+	var jobs []job
+	for _, did := range []string{slow, m.Subject} {
+		if err := db.queueScan(ctx, did); err != nil {
+			t.Fatal(err)
+		}
+		jobs = append(jobs, job{DID: did, Generation: 1})
+	}
+	if err := processBatch(ctx, []*listTarget{{actor: m.Actors[0], session: api, listURI: m.List(0)}}, jobs, db); err != nil {
+		t.Fatal(err)
+	}
+	if api.ChecksCompleted.Load() != 2 || w.RecordCount() != 1 {
+		t.Fatalf("completed %d jobs with %d items", api.ChecksCompleted.Load(), w.RecordCount())
+	}
+}
