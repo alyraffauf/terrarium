@@ -5,7 +5,7 @@
       pname = "trifolium";
       version = "0.1.0";
       src = inputs.self;
-      vendorHash = "sha256-yuhPn9ikgWr2drcyAhV1K6BKgmDBplLWWaTcJKUw13w=";
+      vendorHash = inputs.self.lib.vendorHash;
       subPackages = [ "cmd/trifolium" ];
       env.CGO_ENABLED = 0;
       ldflags = [ "-s" "-w" ];
