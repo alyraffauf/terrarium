@@ -2,12 +2,11 @@ package capensis
 
 import (
 	"context"
-	"fmt"
+
 	"log/slog"
 	"sync/atomic"
 	"time"
 
-	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/xrpc"
 
 	"github.com/alyraffauf/terrarium/palustre"
@@ -61,17 +60,14 @@ func (api *listTarget) belongs(ctx context.Context, did string, resolved resolut
 		return false, nil
 	}
 	// A former member's PDS can confirm deletion when its DID no longer resolves.
-	status, err := atproto.SyncGetRepoStatus(ctx, api.target, did)
+	active, err := palustre.RepoActive(ctx, api.target, did)
 	if xrpcCode(err, "RepoNotFound") || xrpcCode(err, "RepoDeactivated") || xrpcCode(err, "RepoTakendown") {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if status.Did != did {
-		return false, fmt.Errorf("repository status DID does not match %s", did)
-	}
-	if !status.Active {
+	if !active {
 		return false, nil
 	}
 	if resolveErr != nil {

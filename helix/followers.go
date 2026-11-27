@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/bluesky-social/indigo/api/atproto"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/xrpc"
@@ -75,17 +74,14 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 		return subject, err
 	}
 	client := &xrpc.Client{Host: host, Client: api.HTTP}
-	status, err := atproto.SyncGetRepoStatus(ctx, client, did)
+	active, err := palustre.RepoActive(ctx, client, did)
 	if xrpcCode(err, "RepoNotFound") || xrpcCode(err, "RepoDeactivated") || xrpcCode(err, "RepoTakendown") {
 		return subject, nil
 	}
 	if err != nil {
 		return subject, err
 	}
-	if status.Did != did {
-		return subject, fmt.Errorf("repository status DID does not match %s", did)
-	}
-	if !status.Active {
+	if !active {
 		return subject, nil
 	}
 	if resolveErr != nil {
