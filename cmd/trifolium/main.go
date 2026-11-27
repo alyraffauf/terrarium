@@ -104,6 +104,7 @@ func run(ctx context.Context) error {
 	path := flag.String("database", "trifolium.sqlite", "SQLite state file")
 	endpoint := flag.String("jetstream", "wss://jetstream.waow.tech", "Jetstream v2 endpoint")
 	identifier := flag.String("identifier", os.Getenv("TRIFOLIUM_IDENTIFIER"), "list owner")
+	constellation := flag.String("constellation", palustre.DefaultConstellation, "backlink index URL")
 	slingshot := flag.String("slingshot", "https://slingshot.aly.town", "identity resolver")
 	pace := flag.Duration("write-interval", palustre.DefaultFollowerWriteInterval, "minimum interval between list writes")
 	flag.Parse()
@@ -116,6 +117,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 	resolver, err := palustre.NormalizePDS(*slingshot)
+	if err != nil {
+		return err
+	}
+	index, err := palustre.NormalizePDS(*constellation)
 	if err != nil {
 		return err
 	}
@@ -146,7 +151,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	owner := api.Client.Auth.Did
-	a := service{wakeBackfill: make(chan struct{}, 1), store: store{db}, api: api, owner: owner, stream: stream, targets: map[string]bool{}, interval: *interval, http: client}
+	a := service{constellation: index, wakeBackfill: make(chan struct{}, 1), store: store{db}, api: api, owner: owner, stream: stream, targets: map[string]bool{}, interval: *interval, http: client}
 	lists, err := a.setupClusters(ctx, configs, *threshold)
 	if err != nil {
 		return err

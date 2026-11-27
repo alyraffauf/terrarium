@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
-	"github.com/alyraffauf/terrarium/palustre/microcosm"
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	"github.com/bluesky-social/indigo/xrpc"
@@ -22,9 +21,9 @@ type service struct {
 	hostMu    sync.Mutex
 	hostReads map[string]int
 	store
-	api           *palustre.Session
-	owner, stream string
-	targets       map[string]bool
+	api                          *palustre.Session
+	owner, stream, constellation string
+	targets                      map[string]bool
 
 	interval time.Duration
 	http     *http.Client
@@ -45,22 +44,16 @@ func (a *service) fetchDiscoveryPage(ctx context.Context, job discoveryJob) (str
 	var next string
 	var records []backlink
 	if backlinks {
-		client := &xrpc.Client{Host: "https://constellation.microcosm.blue", Client: a.http}
-		page, err := microcosm.LinksGetBacklinks(ctx, client, cursor, nil, 100, followCollection+":subject", target)
+		client := &xrpc.Client{Host: a.constellation, Client: a.http}
+		rows, c, err := palustre.BacklinksPage(ctx, client, target, followCollection, "subject", cursor)
 		if err != nil {
 			return "", nil, err
 		}
-		if page.Records == nil {
-			return "", nil, errors.New("backlink response has no records array")
+		if c != nil {
+			next = *c
 		}
-		if page.Cursor != nil {
-			next = *page.Cursor
-		}
-		for _, record := range page.Records {
-			if record == nil {
-				return "", nil, errors.New("backlink response contains a null record")
-			}
-			records = append(records, backlink{DID: record.Did, Collection: record.Collection, Rkey: record.Rkey})
+		for _, r := range rows {
+			records = append(records, backlink{DID: r.Did, Collection: r.Collection, Rkey: r.Rkey})
 		}
 	} else {
 		client := &xrpc.Client{Host: "https://public.api.bsky.app", Client: a.http}
@@ -88,15 +81,7 @@ func (a *service) fetchDiscoveryPage(ctx context.Context, job discoveryJob) (str
 		if _, err := syntax.ParseDID(record.DID); err != nil {
 			return "", nil, err
 		}
-		if !backlinks {
-			continue
-		}
-		if record.Collection != followCollection {
-			return "", nil, errors.New("unexpected backlink collection")
-		}
-		if _, err := syntax.ParseRecordKey(record.Rkey); err != nil {
-			return "", nil, err
-		}
+
 	}
 	return next, records, nil
 }

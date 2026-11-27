@@ -7,6 +7,7 @@ accounts: []
 threshold: 2
 existingSecret: ""
 passwordKey: app-password
+constellation: https://constellation.microcosm.blue
 slingshot: https://slingshot.aly.town
 jetstream: https://jetstream.waow.tech
 writeInterval: 6s

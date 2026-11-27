@@ -75,3 +75,5 @@ helm upgrade --install trifolium ./trifolium/charts/trifolium \
 ```
 
 The [chart values](charts/trifolium/values.yaml) cover cluster settings, endpoints, image tags, and storage. The chart runs one replica, uses the `Recreate` rollout strategy, and retains its PVC on uninstall. Set `persistence.existingClaim` to reuse a volume.
+
+Set `--constellation` or the Helm value `constellation` to override the backlink endpoint.
