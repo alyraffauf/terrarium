@@ -17,3 +17,4 @@ persistence:
   # null uses the cluster's default storage class; "" disables dynamic provisioning.
   storageClass: null
 resources: {}
+nodeSelector: {}

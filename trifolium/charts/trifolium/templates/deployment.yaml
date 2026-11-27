@@ -19,6 +19,10 @@ spec:
         app.kubernetes.io/name: trifolium
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
