@@ -85,7 +85,8 @@ func TestCheckpointAndNewerEventSurviveRestart(t *testing.T) {
 func TestMembershipMigrationDeletionAndFollowExclusion(t *testing.T) {
 	ctx := context.Background()
 	db := testStore(t)
-	active, followed, failFollowPage, ambiguousWrite := true, false, false, false
+	active, followed, failFollowPage, ambiguousWrite, rejectWrite := true, false, false, false, false
+	createCalls := 0
 	currentPDS := ""
 	records := map[string]json.RawMessage{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -107,17 +108,18 @@ func TestMembershipMigrationDeletionAndFollowExclusion(t *testing.T) {
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]any{"uri": "at://" + ownerDID + "/" + itemCollection + "/" + key, "cid": "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "value": value})
-		case "/xrpc/com.atproto.repo.putRecord":
+		case "/xrpc/com.atproto.repo.createRecord":
+			createCalls++
+			if rejectWrite {
+				http.Error(w, `{"error":"InternalServerError"}`, 500)
+				return
+			}
 			var input struct {
 				Rkey   string          `json:"rkey"`
 				Record json.RawMessage `json:"record"`
-				Swap   json.RawMessage `json:"swapRecord"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Error(err)
-			}
-			if string(input.Swap) != "null" {
-				t.Error("put must use create-only swapRecord")
 			}
 			records[input.Rkey] = input.Record
 			if ambiguousWrite {
@@ -221,8 +223,18 @@ func TestMembershipMigrationDeletionAndFollowExclusion(t *testing.T) {
 	}
 	currentPDS = server.URL
 	ambiguousWrite = true
-	if err := run(); err == nil {
-		t.Fatal("ambiguous write should fail")
+	if err := run(); err != nil {
+		t.Fatal("read-back did not confirm committed membership", err)
+	}
+	if len(records) != 1 {
+		t.Fatal("committed membership missing")
+	}
+	created := createCalls
+	if err := run(); err != nil {
+		t.Fatal(err)
+	}
+	if createCalls != created {
+		t.Fatal("reconciliation attempted to create committed membership again")
 	}
 	ambiguousWrite, active = false, false
 	if err := run(); err != nil {
@@ -244,7 +256,7 @@ func TestMembershipMigrationDeletionAndFollowExclusion(t *testing.T) {
 		t.Fatalf("second list membership: %v %v", otherKeys, err)
 	}
 	currentPDS = api.pds
-	ambiguousWrite = true
+	rejectWrite = true
 	if err := run(); err == nil {
 		t.Fatal("failed write was accepted")
 	}
@@ -255,7 +267,7 @@ func TestMembershipMigrationDeletionAndFollowExclusion(t *testing.T) {
 	if err != nil || len(otherKeys) != 0 {
 		t.Fatalf("old list was not cleaned after another target failed: %v %v", otherKeys, err)
 	}
-	ambiguousWrite = false
+	rejectWrite = false
 	if err := run(); err != nil {
 		t.Fatal(err)
 	}

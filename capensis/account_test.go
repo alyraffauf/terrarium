@@ -128,7 +128,7 @@ func TestFormerHostDeletionKeepsActiveMigratedAccount(t *testing.T) {
 			fmt.Fprintf(w, `{"did":%q,"active":true}`, testDID)
 		case "/xrpc/com.atproto.repo.getRecord":
 			mockItem(w, "current-item", testDID, "at://"+ownerDID+"/"+listCollection+"/current-list")
-		case "/xrpc/com.atproto.repo.putRecord":
+		case "/xrpc/com.atproto.repo.createRecord":
 			writes++
 			fmt.Fprint(w, `{}`)
 		default:

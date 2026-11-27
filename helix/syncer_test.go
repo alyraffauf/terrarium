@@ -145,17 +145,13 @@ func TestMultipleListsFollowExclusionsAndDeletion(t *testing.T) {
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]any{"uri": "at://" + ownerDID + "/" + itemCollection + "/" + key, "cid": "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "value": record})
-		case "/xrpc/com.atproto.repo.putRecord":
+		case "/xrpc/com.atproto.repo.createRecord":
 			var input struct {
-				Rkey       string
-				Record     json.RawMessage
-				SwapRecord json.RawMessage
+				Rkey   string
+				Record json.RawMessage
 			}
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Error(err)
-			}
-			if string(input.SwapRecord) != "null" {
-				t.Error("creation did not use null precondition")
 			}
 			records[input.Rkey] = input.Record
 			puts++

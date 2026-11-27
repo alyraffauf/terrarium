@@ -11,9 +11,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
-	"github.com/alyraffauf/terrarium/palustre/listlex"
 	"github.com/bluesky-social/indigo/api/atproto"
+	"github.com/bluesky-social/indigo/api/bsky"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/ipfs/go-cid"
@@ -80,9 +81,9 @@ func TestIconUpdatePreservesListAndSkipsUnchangedImage(t *testing.T) {
 	hash, _ := multihash.Sum(data, multihash.SHA2_256, -1)
 	blob := &lexutil.LexBlob{Ref: lexutil.LexLink(cid.NewCidV1(cid.Raw, hash)), MimeType: "image/png", Size: int64(len(data))}
 	purpose, description := "app.bsky.graph.defs#modlist", "Keep this description"
-	list := &listlex.GraphList{LexiconTypeID: ListCollection, Name: "Example", Purpose: &purpose, Description: &description, CreatedAt: "2026-01-01T00:00:00Z"}
+	list := &bsky.GraphList{LexiconTypeID: ListCollection, Name: "Example", Purpose: &purpose, Description: &description, CreatedAt: "2026-01-01T00:00:00Z"}
 	uploads, writes := 0, 0
-	api := &Session{}
+	api := &Session{Config: Config{WriteInterval: time.Nanosecond}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -104,7 +105,7 @@ func TestIconUpdatePreservesListAndSkipsUnchangedImage(t *testing.T) {
 			if input.SwapRecord == nil || *input.SwapRecord != "saved-record-cid" {
 				t.Error("missing record precondition")
 			}
-			updated := input.Record.Val.(*listlex.GraphList)
+			updated := input.Record.Val.(*bsky.GraphList)
 			if updated.Description == nil || *updated.Description != description || updated.CreatedAt != list.CreatedAt {
 				t.Error("list metadata changed")
 			}

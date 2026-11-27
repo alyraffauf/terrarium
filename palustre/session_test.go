@@ -7,8 +7,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/bluesky-social/indigo/xrpc"
 )
 
 func TestRefreshBacksOffAfterFailedReauthentication(t *testing.T) {
@@ -111,14 +109,5 @@ func TestAuthenticationBackoffCapsAndResets(t *testing.T) {
 	api.markAuthenticated()
 	if api.retryAuthentication != (authenticationRetry{}) {
 		t.Fatal("successful authentication retained previous backoff")
-	}
-}
-
-const testListOwner = "did:plc:aaaaaaaaaaaaaaaaaaaaaaaa"
-
-func newTestListSession(server *httptest.Server) *Session {
-	return &Session{
-		Config: Config{WriteInterval: time.Nanosecond},
-		Client: &xrpc.Client{Host: server.URL, Client: server.Client(), Auth: &xrpc.AuthInfo{Did: testListOwner}},
 	}
 }

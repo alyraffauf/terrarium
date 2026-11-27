@@ -49,7 +49,7 @@ func TestListSurvivesRestartAndIncompleteLikesPage(t *testing.T) {
 				return
 			}
 			fmt.Fprintf(w, `{"cid":"current","value":%s}`, item)
-		case "com.atproto.repo.putRecord":
+		case "com.atproto.repo.putRecord", "com.atproto.repo.createRecord":
 			var in struct {
 				Rkey   string
 				Record json.RawMessage

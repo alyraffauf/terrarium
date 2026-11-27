@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/alyraffauf/terrarium/palustre/listlex"
 	"github.com/bluesky-social/indigo/api/atproto"
+	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/xrpc"
 )
 
@@ -18,7 +18,7 @@ func TestStableTitleAndDescriptionFollowHandleAcrossRestarts(t *testing.T) {
 	var mutex sync.Mutex
 	handle := "old.example.com"
 	purpose, description := "app.bsky.graph.defs#modlist", "Preserve this"
-	list := &listlex.GraphList{LexiconTypeID: listCollection, Name: listName(firstDID), Purpose: &purpose, Description: &description, CreatedAt: "2026-01-01T00:00:00Z"}
+	list := &bsky.GraphList{LexiconTypeID: listCollection, Name: listName(firstDID), Purpose: &purpose, Description: &description, CreatedAt: "2026-01-01T00:00:00Z"}
 	writes := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mutex.Lock()
@@ -41,7 +41,7 @@ func TestStableTitleAndDescriptionFollowHandleAcrossRestarts(t *testing.T) {
 			if input.Rkey != "stable-key" || input.SwapRecord == nil || *input.SwapRecord != "record-cid" {
 				t.Error("rename lost list identity or concurrency check")
 			}
-			list = input.Record.Val.(*listlex.GraphList)
+			list = input.Record.Val.(*bsky.GraphList)
 			writes++
 			w.Write([]byte(`{}`))
 		default:

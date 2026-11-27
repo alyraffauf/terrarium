@@ -49,7 +49,7 @@ func TestBatchAppliesReadyResultBeforeSlowPDSAndRechecksExclusions(t *testing.T)
 			fmt.Fprintf(w, `{"records":[{"uri":"at://%s/app.bsky.graph.follow/first","value":{"$type":"app.bsky.graph.follow","subject":%q}}]}`, r.URL.Query().Get("repo"), subject)
 		case "/xrpc/com.atproto.repo.getRecord":
 			http.Error(w, `{"error":"RecordNotFound"}`, 404)
-		case "/xrpc/com.atproto.repo.putRecord":
+		case "/xrpc/com.atproto.repo.createRecord":
 			var input struct{ Record struct{ Subject string } }
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Error(err)

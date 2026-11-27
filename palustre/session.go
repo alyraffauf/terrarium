@@ -214,11 +214,8 @@ func captureAuthRetryAfter(retryAfter *time.Time) func(*http.Response) {
 	}
 }
 
-func (api *Session) Put(ctx context.Context, collection, key string, record *lexutil.LexiconTypeDecoder) error {
-	if err := api.WaitWrite(ctx); err != nil {
-		return err
-	}
-	_, err := atproto.RepoPutRecord(ctx, api.Client, &atproto.RepoPutRecord_Input{Repo: api.Client.Auth.Did, Collection: collection, Rkey: key, Record: record})
+func (api *Session) createRecord(ctx context.Context, collection, key string, record *lexutil.LexiconTypeDecoder) error {
+	_, err := atproto.RepoCreateRecord(ctx, api.Client, &atproto.RepoCreateRecord_Input{Repo: api.Client.Auth.Did, Collection: collection, Rkey: &key, Record: record})
 	api.ObserveWriteError(err)
 	return err
 }

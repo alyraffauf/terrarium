@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/bluesky-social/indigo/api/atproto"
-	"github.com/bluesky-social/indigo/atproto/syntax"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
 	_ "github.com/fyne-io/image/ico"
 	"github.com/ipfs/go-cid"
@@ -28,7 +27,7 @@ import (
 	_ "golang.org/x/image/webp"
 	"golang.org/x/net/html"
 
-	"github.com/alyraffauf/terrarium/palustre/listlex"
+	"github.com/bluesky-social/indigo/api/bsky"
 )
 
 const maxIconDownload = 4 << 20
@@ -394,20 +393,20 @@ func (api *Session) Favicon(ctx context.Context, pds string) ([]byte, error) {
 
 // UpdateListIcon preserves the rest of the record and uses its CID to prevent lost edits.
 func (api *Session) UpdateListIcon(ctx context.Context, listURI, name string, data []byte) error {
-	uri, err := syntax.ParseATURI(listURI)
+	key, err := api.listRecordKey(listURI)
 	if err != nil {
 		return err
 	}
-	record, err := atproto.RepoGetRecord(ctx, api.Client, "", ListCollection, api.Client.Auth.Did, uri.RecordKey().String())
+	record, err := atproto.RepoGetRecord(ctx, api.Client, "", ListCollection, api.Client.Auth.Did, key)
 	if err != nil {
 		return err
 	}
 	if record.Value == nil {
 		return fmt.Errorf("managed list has no record value")
 	}
-	list, ok := record.Value.Val.(*listlex.GraphList)
-	if !ok || list.Name != name || list.Purpose == nil || *list.Purpose != "app.bsky.graph.defs#modlist" {
-		return fmt.Errorf("managed list changed identity")
+	list, ok := record.Value.Val.(*bsky.GraphList)
+	if !ok || list.Name != name || list.Purpose == nil || *list.Purpose != moderationListPurpose {
+		return fmt.Errorf("%w: managed list changed identity", ErrUnrelatedList)
 	}
 	digest, err := multihash.Sum(data, multihash.SHA2_256, -1)
 	if err != nil {
@@ -436,7 +435,7 @@ func (api *Session) UpdateListIcon(ctx context.Context, listURI, name string, da
 	if err := api.WaitWrite(ctx); err != nil {
 		return err
 	}
-	_, err = atproto.RepoPutRecord(ctx, api.Client, &atproto.RepoPutRecord_Input{Repo: api.Client.Auth.Did, Collection: ListCollection, Rkey: uri.RecordKey().String(), Record: &lexutil.LexiconTypeDecoder{Val: list}, SwapRecord: record.Cid})
+	_, err = atproto.RepoPutRecord(ctx, api.Client, &atproto.RepoPutRecord_Input{Repo: api.Client.Auth.Did, Collection: ListCollection, Rkey: key, Record: &lexutil.LexiconTypeDecoder{Val: list}, SwapRecord: record.Cid})
 	api.ObserveWriteError(err)
 	return err
 }
