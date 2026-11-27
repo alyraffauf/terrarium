@@ -185,3 +185,24 @@ func TestNumericIntervalsRenderAsSeconds(t *testing.T) {
 		}
 	}
 }
+
+func TestClusterValuesAgreeWithDaemon(t *testing.T) {
+	for _, scope := range []string{"legacy", "named"} {
+		for _, accounts := range [][]string{{}, {"  "}, {"a.example"}} {
+			for _, threshold := range []int{-1, 0, 1, 3} {
+				values := map[string]any{"identifier": "owner.example", "existingSecret": "secret"}
+				if scope == "legacy" {
+					values["accounts"] = accounts
+					values["threshold"] = threshold
+				} else {
+					values["clusters"] = map[string]any{"garden": map[string]any{"accounts": accounts, "threshold": threshold}}
+				}
+				_, err := render(t, "trifolium", values)
+				want := threshold > 0 && len(accounts) > 0 && strings.TrimSpace(accounts[0]) != ""
+				if (err == nil) != want {
+					t.Errorf("%s accounts=%q threshold=%d: %v", scope, accounts, threshold, err)
+				}
+			}
+		}
+	}
+}
