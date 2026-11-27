@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -69,6 +70,10 @@ func Stream(ctx context.Context, endpoint string, cursor int64, handle func([]by
 			return err
 		}
 		_, payload, err := connection.ReadMessage()
+		if errors.Is(err, websocket.ErrReadLimit) {
+			// Reconnecting at the same checkpoint would replay the oversized message.
+			return fmt.Errorf("%w: %w", ErrStreamGap, err)
+		}
 		if err != nil {
 			return err
 		}
