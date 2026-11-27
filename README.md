@@ -1,54 +1,61 @@
 # Terrarium
 
-AT Protocol list tools, named after plants.
+Terrarium keeps Bluesky moderation lists up to date. Give it a post, an account, a group of accounts, or a personal data server (PDS). The daemon publishes a list in your account’s repository and updates its members as the underlying records change. People can subscribe to the list in Bluesky.
 
-| Package | Purpose |
-| --- | --- |
-| [Capensis](capensis/) | Moderation lists of accounts hosted on selected PDSes. *Drosera capensis*. |
-| [Cordata](cordata/) | Moderation list of accounts that liked a post. |
-| [Trifolium](trifolium/) | One moderation list per cluster, with a configurable follower overlap threshold. |
-| [Helix](helix/) | Moderation lists of selected accounts' followers. *Hedera helix*. |
-| [Palustre](palustre/) | Shared AT Protocol operations. *Sphagnum palustre*. |
+## Choose a daemon
 
-Each managed list gets a stable title drawn from 1,024 combinations of neutral adjectives and nature nouns, such as `Quiet Meadow`. Its description identifies the target. On upgrade, the daemons rename existing managed lists in place.
+| If you want to list… | Run | What you get |
+| --- | --- | --- |
+| Everyone who liked a particular post | [Cordata](cordata/README.md) | One list for the post. Cordata checks for new likes and removes accounts whose likes disappear. |
+| Followers of individual accounts | [Helix](helix/README.md) | A separate list for each target. |
+| Accounts that follow several people in a group | [Trifolium](trifolium/README.md) | One list per group. You choose how many distinct targets an account must follow to qualify. |
+| Accounts hosted on particular servers | [Capensis](capensis/README.md) | A separate list for each PDS. |
 
-Capensis, Helix, and Trifolium exclude the list owner and accounts the owner follows. Cordata includes everyone who liked the post, including the owner. Creating a list does not subscribe you to its blocking actions.
+For example, give Trifolium three accounts and a threshold of two. Someone who follows any two qualifies. If they unfollow one and only one remains, Trifolium removes them. Helix, Trifolium, and Capensis exclude you and anyone you follow. Cordata counts every liker, including you.
 
-## Build and develop
+Each list keeps its AT URI across restarts. Its title comes from 1,024 adjective-and-noun combinations, such as `Quiet Meadow`. The description tells subscribers what the list tracks. Publishing a list and subscribing to its moderation actions are separate choices.
 
-Run commands from the repository root:
+## Run a list
+
+From the repository root, inspect a daemon’s options without credentials.
 
 ```sh
-nix build .#capensis .#helix .#cordata .#trifolium
-nix run .#capensis -- --help
 nix run .#helix -- --help
-nix develop -c go test ./...
-nix develop -c go vet ./...
-nix develop -c go build ./cmd/...
 ```
 
-The repository has one Go module. Its `go` directive sets the minimum supported toolchain. CI tests the Go patch version used by the container builds. The Nix checks also run the tests with the Go version pinned in `flake.lock`. Each daemon keeps its Dockerfile, Helm chart, and Nix definition beside its code. The flake discovers `flake-module.nix` files through import-tree.
+To run Helix, set `HELIX_IDENTIFIER` and `HELIX_APP_PASSWORD` for the account that will own the lists. Pass each target as a handle or DID.
 
-After editing SQL queries or Microcosm lexicons, regenerate the committed Go files:
+```sh
+nix run .#helix -- first.example.com second.example.com
+```
+
+Helix prints the list URIs at startup. Keep its SQLite file when you restart. Capensis and Trifolium also use SQLite. Cordata uses the owner’s repository for persistence. Each daemon guide above includes its Helm configuration. Container images are published at `ghcr.io/alyraffauf/terrarium/<daemon>` with `latest` and `sha-<commit>` tags.
+
+## Build and test
+
+The four daemons share one Go module. [Palustre](palustre/README.md) holds their AT Protocol clients, publication logic, and SQLite setup. Each daemon owns its membership rules and deployment files.
+
+```sh
+nix build .#capensis .#cordata .#helix .#trifolium
+nix develop -c go test ./...
+nix develop -c go vet ./...
+nix develop -c ./scripts/test-charts.sh
+FUZZTIME=10s FUZZWORKERS=2 nix develop -c ./scripts/fuzz.sh
+```
+
+Ordinary Go tests replay the checked-in fuzz seeds. The fuzz script generates new cases for each target. Give `FUZZTIME` a duration per target or an execution count such as `1000x`. See the [contributor guide](AGENTS.md) for regression tests and commit conventions.
+
+## Change a schema
+
+Capensis, Helix, and Trifolium use Goose for migrations. Keep SQL migrations in the owning daemon’s `storage/migrations/` directory. Register transactional Go migrations alongside them when an upgrade needs to inspect existing data. Capensis and Helix generate their query code with sqlc. Palustre uses Indigo’s AT Protocol and Bluesky types and generates clients and types for the Microcosm and Jetstream lexicons. Regenerate the affected package after a schema or query change.
 
 ```sh
 nix develop -c ./capensis/scripts/generate-db.sh
 nix develop -c ./helix/scripts/generate-db.sh
 nix develop -c ./palustre/microcosm/generate.sh
+nix develop -c ./palustre/jetstream/generate.sh
 ```
 
-SQL queries use sqlc. Schema changes need a new Goose migration in the application's `storage/migrations/` directory. AT Protocol and Bluesky operations use Indigo’s generated lexicon types. The [Microcosm clients](palustre/microcosm/) use the same pinned Indigo generator for Slingshot and Constellation.
+CI checks the generated files, runs the Go and Nix checks, and builds each container. Successful builds on `main` publish the images. After a Go dependency change, rebuild all four Nix packages and update the shared `vendorHash` in `flake-module.nix` if Nix reports a mismatch.
 
-## CI and dependency updates
-
-CI tests Go code, checks all four Nix packages and generated files, and builds all four containers. Pushes and manual runs on `main` publish `ghcr.io/alyraffauf/terrarium/capensis`, `ghcr.io/alyraffauf/terrarium/helix`, `ghcr.io/alyraffauf/terrarium/cordata`, and `ghcr.io/alyraffauf/terrarium/trifolium` with `latest` and `sha-<commit>` tags. Pull requests build without publishing.
-
-[Renovate](renovate.json) covers Go modules, flake inputs, GitHub Actions, and Docker images. Enable Renovate for the repository to receive update PRs. After Go dependency changes, build all four Nix packages and update the shared `vendorHash` in `flake-module.nix` if Nix reports a mismatch.
-
-[MIT license](LICENSE).
-
-## Property tests and fuzzing
-
-Run `go test ./...` to replay the checked-in seeds. Run `nix develop -c ./scripts/fuzz.sh` to generate new cases for every native Go fuzz target. Set `FUZZTIME=30s` for 30 seconds per target, or `FUZZTIME=1000x` for a fixed number of executions. `FUZZWORKERS` controls parallel workers per target and defaults to two. Run the Helm deployment contracts with `nix develop -c ./scripts/test-charts.sh`.
-
-When Go finds a failure, it writes a minimized input under the affected package's `testdata/fuzz/` directory and prints the command to replay it. Keep confirmed failing cases with the fix.
+[MIT license](LICENSE)
