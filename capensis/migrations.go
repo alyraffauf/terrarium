@@ -12,7 +12,7 @@ import (
 )
 
 func migrate(db *sql.DB) error {
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, storage.Migrations, goose.WithGoMigrations(
+	return palustre.MigrateSQLite(context.Background(), db, storage.Migrations,
 		goose.NewGoMigration(1, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, storage.LegacySchema); err != nil {
 				return err
@@ -28,12 +28,7 @@ func migrate(db *sql.DB) error {
 		goose.NewGoMigration(4, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
 			return canonicalizeStreamEndpoint(tx)
 		}}, nil),
-	))
-	if err != nil {
-		return err
-	}
-	_, err = provider.Up(context.Background())
-	return err
+	)
 }
 func migrateMembers(tx *sql.Tx) error {
 	var legacy bool

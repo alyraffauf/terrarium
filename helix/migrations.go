@@ -11,19 +11,14 @@ import (
 )
 
 func migrate(db *sql.DB) error {
-	provider, err := goose.NewProvider(goose.DialectSQLite3, db, storage.Migrations, goose.WithGoMigrations(
+	return palustre.MigrateSQLite(context.Background(), db, storage.Migrations,
 		// Version 1 is the initial SQL migration. Typed databases never
 		// re-run it, so canonicalizing saved endpoints needs its own
 		// upgrade.
 		goose.NewGoMigration(2, &goose.GoFunc{RunTx: func(ctx context.Context, tx *sql.Tx) error {
 			return canonicalizeSavedEndpoints(tx)
 		}}, nil),
-	))
-	if err != nil {
-		return err
-	}
-	_, err = provider.Up(context.Background())
-	return err
+	)
 }
 
 // canonicalizeSavedEndpoints rewrites the stream checkpoint endpoint and
