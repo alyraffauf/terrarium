@@ -7,6 +7,8 @@ import (
 
 	"slices"
 	"testing"
+
+	"github.com/alyraffauf/terrarium/trifolium/storage"
 )
 
 // Version 1 already supported multiple clusters, but retained a single item
@@ -39,7 +41,7 @@ PRAGMA user_version=1;`)
 			expected[id+"/"+did] = key
 		}
 		a := &service{store: store{legacy}, owner: owner}
-		requireOK(t, a.initialize(t.Context()))
+		requireOK(t, storage.Migrate(t.Context(), a.DB))
 		configure(t, a)
 		got := pairs(t, a, "SELECT cluster||'/'||did,rkey FROM items")
 		if !maps.Equal(got, expected) {
@@ -71,7 +73,7 @@ INSERT INTO items VALUES ('garden','did:example:actor','first'),('garden','did:e
 	requireOK(t, err)
 	s := store{db}
 	for range 2 {
-		requireOK(t, s.initialize(t.Context()))
+		requireOK(t, storage.Migrate(t.Context(), s.DB))
 		keys, err := s.MemberKeys(t.Context(), "garden", "did:example:actor")
 		requireOK(t, err)
 		if !slices.Equal(keys, []string{"first", "second"}) {

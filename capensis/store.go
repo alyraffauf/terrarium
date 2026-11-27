@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite"
-
 	"github.com/alyraffauf/terrarium/capensis/storage"
 	"github.com/alyraffauf/terrarium/palustre"
 )
@@ -28,13 +26,8 @@ type job struct {
 }
 
 func openStore(path string) (*store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := palustre.OpenSQLite(context.Background(), path)
 	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;`); err != nil {
-		db.Close()
 		return nil, err
 	}
 	if err = migrate(db); err != nil {

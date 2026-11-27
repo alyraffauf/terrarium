@@ -7,6 +7,8 @@ import (
 	"maps"
 	"path/filepath"
 	"testing"
+
+	"github.com/alyraffauf/terrarium/trifolium/storage"
 	"time"
 )
 
@@ -28,7 +30,7 @@ func openStore(t *testing.T, path string) *service {
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
 	a := &service{store: store{db}, owner: owner, stream: "stream", targets: map[string]bool{}}
-	requireOK(t, a.initialize(t.Context()))
+	requireOK(t, storage.Migrate(t.Context(), a.DB))
 	return a
 }
 func configure(t *testing.T, a *service) []*cluster {

@@ -5,19 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-
-	"github.com/alyraffauf/terrarium/trifolium/storage"
-	_ "modernc.org/sqlite"
 )
 
 type store struct{ *sql.DB }
-
-func (s store) initialize(ctx context.Context) error {
-	if _, err := s.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
-		return err
-	}
-	return storage.Migrate(ctx, s.DB)
-}
 
 func (s store) transaction(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.BeginTx(ctx, nil)

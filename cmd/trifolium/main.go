@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
+	"github.com/alyraffauf/terrarium/trifolium/storage"
 	"github.com/gofrs/flock"
 )
 
@@ -133,13 +134,12 @@ func run(ctx context.Context) error {
 		return errors.New("database already in use")
 	}
 	defer lock.Close()
-	db, err := sql.Open("sqlite", *path)
+	db, err := palustre.OpenSQLite(ctx, *path)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
-	db.SetMaxOpenConns(1)
-	if err = (store{db}).initialize(ctx); err != nil {
+	if err = storage.Migrate(ctx, db); err != nil {
 		return err
 	}
 	if err = api.Login(ctx); err != nil {
