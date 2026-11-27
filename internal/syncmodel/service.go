@@ -132,8 +132,9 @@ func List(i int) string { return fmt.Sprintf("at://%s/app.bsky.graph.list/list%d
 
 // Each round changes the external facts, then reconciles one account on both targets.
 func Service(f *testing.F, byHost bool, setup func(*testing.T, *World) func(string, bool, int, bool) error) {
-	f.Add([]byte{7, 15, 39, 135, 23, 7, 0, 7, 71})
-	f.Fuzz(func(t *testing.T, trace []byte) {
+	f.Add([]byte{7, 15, 39, 135, 23, 7, 0, 7, 71}, uint32(1<<3))
+	f.Add([]byte{135, 7, 23, 135}, uint32(1<<1|1<<3))
+	f.Fuzz(func(t *testing.T, trace []byte, reopens uint32) {
 		w := &World{records: map[string]map[string]any{}}
 		run := setup(t, w)
 		var expected [2]bool
@@ -151,7 +152,8 @@ func Service(f *testing.F, byHost bool, setup func(*testing.T, *World) func(stri
 			if b&32 != 0 {
 				paused = w.Host
 			}
-			if err := run(did, excluded, paused, b&128 != 0); err != nil {
+			reopen := reopens&(1<<step) != 0
+			if err := run(did, excluded, paused, reopen); err != nil {
 				t.Fatalf("step %d: %v", step, err)
 			}
 			if did == Subject {
