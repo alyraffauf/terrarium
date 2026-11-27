@@ -6,6 +6,7 @@ AT Protocol list tools, named after plants.
 | --- | --- |
 | [Capensis](capensis/) | Moderation lists of accounts hosted on selected PDSes. *Drosera capensis*. |
 | [Cordata](cordata/) | Moderation list of accounts that liked a post. |
+| [Trifolium](trifolium/) | One moderation list based on a configurable follower overlap threshold. |
 | [Helix](helix/) | Moderation lists of selected accounts' followers. *Hedera helix*. |
 | [Palustre](palustre/) | Shared AT Protocol operations. *Sphagnum palustre*. |
 

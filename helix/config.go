@@ -110,6 +110,9 @@ func (cfg *Config) validate() error {
 	if err != nil {
 		return err
 	}
+	if cfg.WriteInterval == 0 {
+		cfg.WriteInterval = palustre.DefaultFollowerWriteInterval
+	}
 	if cfg.WriteInterval < 0 {
 		return fmt.Errorf("write-interval cannot be negative")
 	}

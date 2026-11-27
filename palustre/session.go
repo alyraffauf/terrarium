@@ -154,6 +154,7 @@ func XRPCCode(err error, code string) bool {
 }
 
 const DefaultWriteInterval = 10 * time.Second
+const DefaultFollowerWriteInterval = 6 * time.Second
 
 type Config struct {
 	Identifier, Password, LoginPDS, Slingshot string

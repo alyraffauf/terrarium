@@ -17,6 +17,7 @@ type Frame struct {
 		WitnessedAt string          `json:"witnessedAt"`
 		Collection  string          `json:"collection"`
 		Name        string          `json:"name"`
+		Rkey        string          `json:"rkey"`
 		Operation   string          `json:"operation"`
 		Record      json.RawMessage `json:"record"`
 	} `json:"payload"`

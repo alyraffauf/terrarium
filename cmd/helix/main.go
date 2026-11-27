@@ -68,7 +68,7 @@ func command() *cobra.Command {
 	flags.String("slingshot", "https://slingshot.aly.town", "Slingshot base URL")
 	flags.String("jetstream", "wss://jetstream.waow.tech", "Jetstream v2 base URL or subscribeEvents URL")
 	flags.String("database", "helix.sqlite", "SQLite state file")
-	flags.Duration("write-interval", palustre.DefaultWriteInterval, "Minimum interval between writes across all lists in this process (0 uses the default)")
+	flags.Duration("write-interval", palustre.DefaultFollowerWriteInterval, "Minimum interval between writes across all lists in this process (0 uses the default)")
 	flags.Duration("rescan-interval", 6*time.Hour, "Interval between follower backfills")
 	if err := config.BindPFlags(flags); err != nil {
 		panic(err)
