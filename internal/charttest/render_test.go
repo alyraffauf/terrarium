@@ -165,3 +165,23 @@ func TestDefaultClusterHasOneSource(t *testing.T) {
 		}
 	}
 }
+
+func TestNumericIntervalsRenderAsSeconds(t *testing.T) {
+	for _, app := range []string{"capensis", "helix", "cordata", "trifolium"} {
+		for _, value := range []any{6, "6"} {
+			docs, err := render(t, app, map[string]any{
+				"identifier": "owner.example", "existingSecret": "secret", "accounts": []string{"a.example"}, "pds": []string{"a.example"},
+				"post": "at://did:example:a/app.bsky.feed.post/key", "writeInterval": value, "rescanInterval": value,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			args := docs["Deployment"].Spec.Template.Spec.Containers[0].Args
+			for _, flag := range []string{"write-interval", "rescan-interval"} {
+				if !slices.Contains(args, "--"+flag+"=6s") {
+					t.Errorf("%s rendered %s without seconds: %v", app, flag, args)
+				}
+			}
+		}
+	}
+}
