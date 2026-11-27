@@ -9,3 +9,7 @@ import (
 func TestTargetSourcePrecedence(t *testing.T) {
 	clitest.CheckTargetPrecedence(t, command, "CAPENSIS", "pds")
 }
+
+func TestIntervalSourcePrecedence(t *testing.T) {
+	clitest.CheckIntervalPrecedence(t, command, "CAPENSIS", "one.example")
+}

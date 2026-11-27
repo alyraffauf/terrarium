@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/alyraffauf/terrarium/internal/clitest"
 )
 
 func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
@@ -94,4 +96,8 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIntervalSourcePrecedence(t *testing.T) {
+	clitest.CheckIntervalPrecedence(t, command, "CORDATA", "at://did:example:author/app.bsky.feed.post/example")
 }

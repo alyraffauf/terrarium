@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/alyraffauf/terrarium/capensis"
+	"github.com/alyraffauf/terrarium/cmd/internal/settings"
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -47,12 +48,16 @@ func command() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			intervals, err := settings.ReadIntervals(config)
+			if err != nil {
+				return err
+			}
 			cfg := capensis.Config{
-				WriteInterval: config.GetDuration("write-interval"),
+				WriteInterval: intervals.Write,
 				Targets:       targets, Identifier: config.GetString("identifier"),
 				Password: config.GetString("app-password"), LoginPDS: config.GetString("login-pds"),
 				Slingshot: config.GetString("slingshot"), Jetstream: config.GetString("jetstream"),
-				MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: config.GetDuration("rescan-interval"),
+				MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: intervals.Rescan,
 			}
 			return capensis.Run(cmd.Context(), cfg)
 		},

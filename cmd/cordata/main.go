@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alyraffauf/terrarium/cmd/internal/settings"
 	"github.com/alyraffauf/terrarium/cordata"
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/spf13/cobra"
@@ -38,17 +39,21 @@ func command() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			intervals, err := settings.ReadIntervals(config)
+			if err != nil {
+				return err
+			}
 			return cordata.Run(cmd.Context(), cordata.Config{
 				Config: palustre.Config{
 					Identifier:    config.GetString("identifier"),
 					Password:      config.GetString("app-password"),
 					LoginPDS:      config.GetString("login-pds"),
 					Slingshot:     config.GetString("slingshot"),
-					WriteInterval: config.GetDuration("write-interval"),
+					WriteInterval: intervals.Write,
 				},
 				AppView:        config.GetString("appview"),
 				Post:           args[0],
-				RescanInterval: config.GetDuration("rescan-interval"),
+				RescanInterval: intervals.Rescan,
 			})
 		},
 	}

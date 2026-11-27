@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/alyraffauf/terrarium/cmd/internal/settings"
 	"github.com/alyraffauf/terrarium/helix"
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/spf13/cobra"
@@ -47,12 +48,16 @@ func command() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			intervals, err := settings.ReadIntervals(config)
+			if err != nil {
+				return err
+			}
 			cfg := helix.Config{
-				WriteInterval: config.GetDuration("write-interval"),
+				WriteInterval: intervals.Write,
 				Targets:       targets, Identifier: config.GetString("identifier"),
 				Password: config.GetString("app-password"), LoginPDS: config.GetString("login-pds"),
 				Slingshot: config.GetString("slingshot"), Jetstream: config.GetString("jetstream"),
-				AppView: config.GetString("appview"), MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: config.GetDuration("rescan-interval"),
+				AppView: config.GetString("appview"), MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: intervals.Rescan,
 			}
 			return helix.Run(cmd.Context(), cfg)
 		},
