@@ -18,7 +18,6 @@ func FuzzStreamRouting(f *testing.F) {
 		}
 		defer db.Close()
 		ctx := t.Context()
-		known := map[string]bool{}
 		var cursor, version int64
 		for i, b := range history[:min(len(history), 48)] {
 			kind := []string{"sync", "account", "identity", "commit", "commit", "commit", "commit", "broken"}[b%8]
@@ -62,7 +61,6 @@ func FuzzStreamRouting(f *testing.F) {
 				if err != nil || work.DID != did {
 					t.Fatalf("frame %d work %+v %v", i, work, err)
 				}
-				known[did] = true
 				if err := db.finish(ctx, work); err != nil {
 					t.Fatal(err)
 				}
