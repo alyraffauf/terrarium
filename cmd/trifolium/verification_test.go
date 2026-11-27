@@ -262,3 +262,57 @@ func TestOwnerInventorySkipsMalformedFollowValues(t *testing.T) {
 		t.Fatalf("owner scan still pending: %v", err)
 	}
 }
+
+func TestUnavailableFollowInventory(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		did        string
+		status     int
+		statusBody string
+		superseded bool
+		keepEdges  bool
+	}{
+		{name: "inactive", did: actor, status: 200, statusBody: `{"active":false}`},
+		{name: "deleted", did: actor, status: 400, statusBody: `{"error":"RepoNotFound"}`},
+		{name: "temporarily unavailable", did: actor, status: 503, statusBody: `{"error":"RepoNotFound"}`, keepEdges: true},
+		{name: "still active", did: actor, status: 200, statusBody: `{"active":true}`, keepEdges: true},
+		{name: "superseded", did: actor, status: 200, statusBody: `{"active":false}`, superseded: true},
+		{name: "unavailable owner", did: owner, keepEdges: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := openStore(t, ":memory:")
+			configure(t, a)
+			execute(t, a, dirty, tc.did)
+			job, err := a.claim(t.Context(), false)
+			requireOK(t, err)
+			requireOK(t, a.savePage(t.Context(), job, "", "more", map[string]string{"old": targets[0]}))
+			connect(a, func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Path {
+				case "/xrpc/com.atproto.repo.listRecords":
+					return reply(400, `{"error":"RepoNotFound"}`), nil
+				case "/xrpc/com.atproto.sync.getRepoStatus":
+					if tc.superseded {
+						execute(t, a, dirty, tc.did)
+					}
+					body := strings.TrimSuffix(tc.statusBody, "}") + fmt.Sprintf(`,"did":%q}`, tc.did)
+					return reply(tc.status, body), nil
+				default:
+					t.Fatalf("unexpected request to %s", r.URL)
+					return nil, nil
+				}
+			})
+			err = a.scanPage(t.Context(), a.api.Client, job)
+			wantErr := tc.status == 0 || tc.status == 503 || strings.Contains(tc.statusBody, `"active":true`)
+			if (err != nil) != wantErr {
+				t.Fatalf("scan error = %v, want error %t", err, wantErr)
+			}
+			wantEdges := map[string]string{}
+			if wantErr || tc.superseded {
+				wantEdges["old"] = targets[0]
+			}
+			if got := pairs(t, a, "SELECT rkey,target FROM edges WHERE actor=?", tc.did); !maps.Equal(got, wantEdges) {
+				t.Fatalf("follows = %v, want %v", got, wantEdges)
+			}
+		})
+	}
+}
