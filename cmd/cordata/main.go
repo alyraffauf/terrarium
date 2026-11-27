@@ -29,11 +29,29 @@ func command() *cobra.Command {
 	config.SetEnvPrefix("CORDATA")
 	config.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	config.AutomaticEnv()
-	cmd := &cobra.Command{Use: "cordata POST_URL", Short: "Maintain a moderation list of accounts that liked a post", Args: cobra.ExactArgs(1), SilenceUsage: true, SilenceErrors: true,
+	cmd := &cobra.Command{
+		Use:           "cordata POST_URL",
+		Short:         "Maintain a moderation list of accounts that liked a post",
+		Long:          "Maintain a moderation list of everyone who liked a post. Pass a bsky.app post link or an AT URI. Flags override matching CORDATA_ environment variables (replace hyphens with underscores).",
+		Example:       "cordata 'at://bsky.app/app.bsky.feed.post/3mzyk34ho4c27'",
+		Args:          cobra.ExactArgs(1),
+		SilenceUsage:  true,
+		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := palustre.Config{Identifier: config.GetString("identifier"), Password: config.GetString("app-password"), LoginPDS: config.GetString("login-pds"), Slingshot: config.GetString("slingshot"), WriteInterval: config.GetDuration("write-interval")}
-			return cordata.Run(cmd.Context(), cfg, config.GetString("appview"), args[0], config.GetDuration("rescan-interval"))
-		}}
+			return cordata.Run(cmd.Context(), cordata.Config{
+				Config: palustre.Config{
+					Identifier:    config.GetString("identifier"),
+					Password:      config.GetString("app-password"),
+					LoginPDS:      config.GetString("login-pds"),
+					Slingshot:     config.GetString("slingshot"),
+					WriteInterval: config.GetDuration("write-interval"),
+				},
+				AppView:        config.GetString("appview"),
+				Post:           args[0],
+				RescanInterval: config.GetDuration("rescan-interval"),
+			})
+		},
+	}
 	flags := cmd.Flags()
 	flags.String("identifier", "", "List owner's handle or DID")
 	flags.String("app-password", "", "List owner's app password")

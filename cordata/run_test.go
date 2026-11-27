@@ -19,6 +19,7 @@ func TestListSurvivesRestartAndIncompleteLikesPage(t *testing.T) {
 	const liker = "did:example:liker"
 	const post = "at://did:example:author/app.bsky.feed.post/demo"
 	const list = "at://did:example:owner/app.bsky.graph.list/demo"
+	malformed := ""
 	liked, incomplete := true, false
 	var item json.RawMessage
 	var key string
@@ -28,14 +29,16 @@ func TestListSurvivesRestartAndIncompleteLikesPage(t *testing.T) {
 		switch strings.TrimPrefix(r.URL.Path, "/xrpc/") {
 		case "app.bsky.feed.getLikes":
 			switch {
+			case malformed != "":
+				fmt.Fprint(w, malformed)
 			case incomplete && r.URL.Query().Get("cursor") == "":
-				fmt.Fprint(w, `{"likes":[],"cursor":"next"}`)
+				fmt.Fprint(w, `{"uri":"at://did:example:author/app.bsky.feed.post/demo","likes":[],"cursor":"next"}`)
 			case incomplete:
 				http.Error(w, `{"error":"Unavailable"}`, 503)
 			case liked:
-				fmt.Fprintf(w, `{"likes":[{"actor":{"did":%q}}]}`, liker)
+				fmt.Fprintf(w, `{"uri":"at://did:example:author/app.bsky.feed.post/demo","likes":[{"actor":{"did":%q}}]}`, liker)
 			default:
-				fmt.Fprint(w, `{"likes":[]}`)
+				fmt.Fprint(w, `{"uri":"at://did:example:author/app.bsky.feed.post/demo","likes":[]}`)
 			}
 		case "com.atproto.repo.listRecords":
 			if item == nil {
@@ -49,7 +52,7 @@ func TestListSurvivesRestartAndIncompleteLikesPage(t *testing.T) {
 				return
 			}
 			fmt.Fprintf(w, `{"cid":"current","value":%s}`, item)
-		case "com.atproto.repo.putRecord", "com.atproto.repo.createRecord":
+		case "com.atproto.repo.createRecord", "com.atproto.repo.putRecord":
 			var in struct {
 				Rkey   string
 				Record json.RawMessage
@@ -83,6 +86,12 @@ func TestListSurvivesRestartAndIncompleteLikesPage(t *testing.T) {
 	if puts != 1 || item == nil {
 		t.Fatal("expected exactly one membership write")
 	}
+	for _, malformed = range []string{`{}`, `{"likes":null}`, `{"likes":[],"uri":"at://did:example:other/app.bsky.feed.post/demo"}`} {
+		if err := scan(); err == nil || item == nil {
+			t.Fatal("malformed scan removed existing membership")
+		}
+	}
+	malformed = ""
 	incomplete = true
 	if err := scan(); err == nil || item == nil {
 		t.Fatal("incomplete scan must preserve membership")
@@ -93,5 +102,26 @@ func TestListSurvivesRestartAndIncompleteLikesPage(t *testing.T) {
 	}
 	if item != nil {
 		t.Fatal("unlike left a list item behind")
+	}
+}
+
+func TestPostTarget(t *testing.T) {
+	const post = "at://author.example/app.bsky.feed.post/demo"
+	for _, input := range []string{post, "https://bsky.app/profile/author.example/post/demo"} {
+		got, err := parsePost(input)
+		if err != nil || got.String() != post {
+			t.Fatalf("parse %q: %q, %v", input, got, err)
+		}
+	}
+	for _, input := range []string{"http://bsky.app/profile/a.example/post/key", "https://example.org/profile/a.example/post/key", "https://bsky.app/profile/a.example", "at://author.example/app.bsky.graph.list/key", "at://author.example/app.bsky.feed.post"} {
+		if _, err := parsePost(input); err == nil {
+			t.Errorf("accepted %q", input)
+		}
+	}
+}
+
+func TestRepeatedLikesCursor(t *testing.T) {
+	if err := pages(func(string) (*string, error) { cursor := "same"; return &cursor, nil }); err == nil {
+		t.Fatal("accepted repeated cursor")
 	}
 }

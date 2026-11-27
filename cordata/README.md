@@ -6,9 +6,9 @@ Cordata maintains a Bluesky moderation list of accounts that liked one post. Set
 nix run .#cordata -- 'https://bsky.app/profile/bsky.app/post/3mzyk34ho4c27'
 ```
 
-The target can also be an AT URI. The description contains the post’s DID-based AT URI. When upgrading a list with a handle-based AT URI as its title, Cordata also keeps that URI in the description.
+The target can also be an AT URI. The description contains the post’s DID-based AT URI. When the existing description matches the target and the list title is a handle-based URI for the same post, Cordata preserves the old title in the description.
 
-Cordata scans public AppView likes and the owner's list items, then adds or removes members. It waits five minutes after each completed pass and spaces writes ten seconds apart. Use `--rescan-interval` and `--write-interval` to adjust those timings. The owner's repo stores the list and its members across restarts.
+Cordata includes the list owner and accounts they follow if they liked the post. It scans public AppView likes and the owner's list items, then adds or removes members. It waits five minutes after each successful pass and one minute after a failed pass and spaces writes ten seconds apart. Use `--rescan-interval` and `--write-interval` to adjust those timings. The owner's repo stores the list and its members across restarts.
 
 ## Kubernetes
 

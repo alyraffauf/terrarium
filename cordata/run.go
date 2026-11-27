@@ -3,24 +3,26 @@ package cordata
 import (
 	"context"
 	"fmt"
-	"github.com/alyraffauf/terrarium/palustre"
-	"github.com/alyraffauf/terrarium/palustre/listlex"
-	"github.com/bluesky-social/indigo/api/atproto"
-	"github.com/bluesky-social/indigo/atproto/syntax"
-	lexutil "github.com/bluesky-social/indigo/lex/util"
-	"github.com/bluesky-social/indigo/xrpc"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/alyraffauf/terrarium/palustre"
+	"github.com/bluesky-social/indigo/api/atproto"
+	"github.com/bluesky-social/indigo/api/bsky"
+	"github.com/bluesky-social/indigo/atproto/syntax"
+	"github.com/bluesky-social/indigo/xrpc"
 )
 
-func postURI(ctx context.Context, client *xrpc.Client, raw string) (string, error) {
+func parsePost(raw string) (syntax.ATURI, error) {
 	const collection = "app.bsky.feed.post"
 	if !strings.HasPrefix(raw, "at://") {
 		link, err := url.Parse(raw)
-		if err != nil || link.Scheme != "https" || link.Host != "bsky.app" {
+		if err != nil || link.Scheme != "https" || link.Host != "bsky.app" || link.User != nil {
 			return "", fmt.Errorf("expected a Bluesky post link or AT URI")
 		}
 		parts := strings.Split(strings.Trim(link.Path, "/"), "/")
@@ -33,15 +35,23 @@ func postURI(ctx context.Context, client *xrpc.Client, raw string) (string, erro
 	if err != nil || uri.Collection().String() != collection || uri.RecordKey() == "" {
 		return "", fmt.Errorf("invalid post URI")
 	}
+	return uri, nil
+}
+
+func resolvePost(ctx context.Context, client *xrpc.Client, uri syntax.ATURI) (string, error) {
 	actor := uri.Authority().String()
 	if !strings.HasPrefix(actor, "did:") {
 		resolved, err := atproto.IdentityResolveHandle(ctx, client, actor)
 		if err != nil {
 			return "", err
 		}
-		actor = resolved.Did
+		did, err := syntax.ParseDID(resolved.Did)
+		if err != nil {
+			return "", err
+		}
+		actor = did.String()
 	}
-	return "at://" + actor + "/" + collection + "/" + uri.RecordKey().String(), nil
+	return "at://" + actor + "/" + uri.Collection().String() + "/" + uri.RecordKey().String(), nil
 }
 
 // The owner's repo is the durable membership store. Rebuild this index each scan.
@@ -75,30 +85,23 @@ func pages(read func(string) (*string, error)) error {
 }
 
 func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, post, list string) error {
-	wanted := map[string]bool{}
+	likers := map[string]bool{}
 	err := pages(func(cursor string) (*string, error) {
-		var page struct {
-			Cursor *string `json:"cursor"`
-			Likes  []struct {
-				Actor struct {
-					Did string `json:"did"`
-				} `json:"actor"`
-			} `json:"likes"`
-		}
-		params := map[string]any{"uri": post, "limit": 100}
-		if cursor != "" {
-			params["cursor"] = cursor
-		}
-		err := view.LexDo(ctx, lexutil.Query, "", "app.bsky.feed.getLikes", params, nil, &page)
+		page, err := bsky.FeedGetLikes(ctx, view, "", cursor, 100, post)
 		if err != nil {
 			return nil, err
 		}
+		if page.Uri != post || page.Likes == nil {
+			return nil, fmt.Errorf("invalid likes inventory for %s", post)
+		}
 		for _, like := range page.Likes {
-
+			if like == nil || like.Actor == nil {
+				return nil, fmt.Errorf("like missing actor")
+			}
 			if _, err := syntax.ParseDID(like.Actor.Did); err != nil {
 				return nil, err
 			}
-			wanted[like.Actor.Did] = true
+			likers[like.Actor.Did] = true
 		}
 		return page.Cursor, nil
 	})
@@ -106,59 +109,72 @@ func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, pos
 		return err
 	}
 	items := inventory{}
-	owner := api.Client.Auth.Did
-	err = pages(func(cursor string) (*string, error) {
-		page, err := atproto.RepoListRecords(ctx, api.Client, palustre.ItemCollection, cursor, 100, owner, false)
-		if err != nil {
-			return nil, err
+	err = palustre.WalkListItems(ctx, api.Client, func(uri, did, key string) error {
+		if uri == list {
+			items[did] = append(items[did], key)
 		}
-		for _, record := range page.Records {
-			if record == nil || record.Value == nil {
-				return nil, fmt.Errorf("empty list item")
-			}
-			item, ok := record.Value.Val.(*listlex.GraphListitem)
-			if !ok || item.List != list {
-				continue
-			}
-			uri, err := syntax.ParseATURI(record.Uri)
-			if err != nil {
-				return nil, err
-			}
-			items[item.Subject] = append(items[item.Subject], uri.RecordKey().String())
-			if _, ok := wanted[item.Subject]; !ok {
-				wanted[item.Subject] = false
-			}
-		}
-		return page.Cursor, nil
+		return nil
 	})
 	if err != nil {
 		return err
 	}
-	for did, include := range wanted {
+	subjects := maps.Clone(likers)
+	for did := range items {
+		subjects[did] = true
+	}
+	var firstFailure error
+	for _, did := range slices.Sorted(maps.Keys(subjects)) {
 		if err := api.Refresh(ctx); err != nil {
 			return err
 		}
-		if err := api.Reconcile(ctx, items, palustre.Membership{Target: post, ListURI: list, DID: did, Include: include}); err != nil {
-			return err
+		if err := api.Reconcile(ctx, items, palustre.Membership{Target: post, ListURI: list, DID: did, Include: likers[did]}); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if firstFailure == nil {
+				firstFailure = fmt.Errorf("reconcile %s: %w", did, err)
+			}
 		}
 	}
-	return nil
+	return firstFailure
 }
 
-func Run(ctx context.Context, cfg palustre.Config, appView, raw string, interval time.Duration) error {
+type Config struct {
+	palustre.Config
+	AppView, Post  string
+	RescanInterval time.Duration
+}
+
+func Run(ctx context.Context, cfg Config) error {
 	if cfg.Identifier == "" || cfg.Password == "" {
 		return fmt.Errorf("identifier and app-password are required")
 	}
-	if interval <= 0 || cfg.WriteInterval < 0 {
+	if cfg.RescanInterval <= 0 || cfg.WriteInterval < 0 {
 		return fmt.Errorf("rescan-interval must be positive and write-interval cannot be negative")
 	}
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	view := &xrpc.Client{Host: appView, Client: httpClient}
-	post, err := postURI(ctx, view, raw)
+	uri, err := parsePost(cfg.Post)
 	if err != nil {
 		return err
 	}
-	api := &palustre.Session{Config: cfg, HTTP: httpClient}
+	for _, base := range []*string{&cfg.AppView, &cfg.Slingshot} {
+		*base, err = palustre.NormalizePDS(*base)
+		if err != nil {
+			return err
+		}
+	}
+	if cfg.LoginPDS != "" {
+		cfg.LoginPDS, err = palustre.NormalizePDS(cfg.LoginPDS)
+		if err != nil {
+			return err
+		}
+	}
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	view := &xrpc.Client{Host: cfg.AppView, Client: httpClient}
+	post, err := resolvePost(ctx, view, uri)
+	if err != nil {
+		return err
+	}
+	api := &palustre.Session{Config: cfg.Config, HTTP: httpClient}
 	if err := api.Login(ctx); err != nil {
 		return err
 	}
@@ -173,7 +189,7 @@ func Run(ctx context.Context, cfg palustre.Config, appView, raw string, interval
 			slog.Info("maintaining list", "post", post, "list", list)
 			err = syncPost(ctx, api, view, post, list)
 		}
-		delay := interval
+		delay := cfg.RescanInterval
 		if err != nil && ctx.Err() == nil {
 			slog.Error("post sync failed", "error", err)
 			delay = time.Minute
