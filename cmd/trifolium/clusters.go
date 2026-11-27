@@ -72,14 +72,7 @@ func (a *service) includeLegacyCluster(ctx context.Context, configs map[string]c
 	if _, explicit := configs[defaultCluster]; explicit {
 		return configs, nil
 	}
-	var version int
-	if err := a.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return nil, err
-	}
-	if version != 0 {
-		return configs, nil
-	}
-	rows, err := a.QueryContext(ctx, "SELECT target FROM watched")
+	rows, err := a.QueryContext(ctx, "SELECT target FROM legacy_default_targets")
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +140,7 @@ func (a *service) setupClusters(ctx context.Context, configs map[string]clusterC
 		lists = append(lists, &cluster{service: a, id: id, list: listURI(a.owner, id), threshold: configs[id].Threshold})
 	}
 	err = a.transaction(ctx, func(tx *sql.Tx) error {
-		if err := migrateClusters(tx); err != nil {
+		if _, err := tx.Exec("DELETE FROM legacy_default_targets"); err != nil {
 			return err
 		}
 		for id, targets := range groups {
@@ -196,51 +189,4 @@ ON CONFLICT(did) DO UPDATE SET version=version+1,due=0`, id)
 		return err
 	}
 	return nil
-}
-
-func migrateClusters(tx *sql.Tx) error {
-	var version int
-	if err := tx.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
-		return err
-	}
-	switch version {
-	case 2:
-		return nil
-	case 1:
-		_, err := tx.Exec(`
-ALTER TABLE items RENAME TO items_by_did;
-CREATE TABLE items(cluster TEXT NOT NULL,did TEXT NOT NULL,rkey TEXT NOT NULL,PRIMARY KEY(cluster,rkey));
-INSERT INTO items SELECT cluster,did,rkey FROM items_by_did;
-DROP TABLE items_by_did;
-CREATE INDEX items_by_did ON items(cluster,did);
-PRAGMA user_version=2;`)
-		return err
-	case 0:
-		return migrateSingleList(tx)
-	default:
-		return fmt.Errorf("unknown Trifolium database version %d", version)
-	}
-}
-
-func migrateSingleList(tx *sql.Tx) error {
-	_, err := tx.Exec(`
-ALTER TABLE items RENAME TO legacy_items;
-ALTER TABLE pending RENAME TO legacy_pending;
-ALTER TABLE published RENAME TO legacy_published;
-ALTER TABLE retries RENAME TO legacy_retries;
-ALTER TABLE descriptions RENAME TO legacy_descriptions;
-` + membershipSchema + `
-INSERT INTO items SELECT 'default',did,rkey FROM legacy_items;
-INSERT INTO pending SELECT 'default',did FROM legacy_pending;
-INSERT INTO published SELECT 'default',did FROM legacy_published;
-INSERT INTO retries SELECT 'default',did,due FROM legacy_retries;
-INSERT INTO descriptions SELECT 'default',text FROM legacy_descriptions;
-INSERT INTO cluster_targets SELECT 'default',target FROM watched;
-DROP TABLE legacy_items;
-DROP TABLE legacy_pending;
-DROP TABLE legacy_published;
-DROP TABLE legacy_retries;
-DROP TABLE legacy_descriptions;
-PRAGMA user_version=2;`)
-	return err
 }

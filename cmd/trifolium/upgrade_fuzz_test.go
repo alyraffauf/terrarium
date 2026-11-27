@@ -59,3 +59,28 @@ PRAGMA user_version=1;`)
 		}
 	})
 }
+
+func TestGooseAdoptsVersionTwo(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	requireOK(t, err)
+	db.SetMaxOpenConns(1)
+	defer db.Close()
+	_, err = db.Exec(`PRAGMA user_version=2;
+CREATE TABLE items(cluster TEXT NOT NULL,did TEXT NOT NULL,rkey TEXT NOT NULL,PRIMARY KEY(cluster,rkey));
+INSERT INTO items VALUES ('garden','did:example:actor','first'),('garden','did:example:actor','second');`)
+	requireOK(t, err)
+	s := store{db}
+	for range 2 {
+		requireOK(t, s.initialize(t.Context()))
+		keys, err := s.MemberKeys(t.Context(), "garden", "did:example:actor")
+		requireOK(t, err)
+		if !slices.Equal(keys, []string{"first", "second"}) {
+			t.Fatalf("version 2 adoption changed keys: %v", keys)
+		}
+		var applied int
+		requireOK(t, db.QueryRow("SELECT count(*) FROM goose_db_version WHERE version_id BETWEEN 1 AND 3 AND is_applied").Scan(&applied))
+		if applied != 3 {
+			t.Fatalf("got %d applied Goose migrations", applied)
+		}
+	}
+}
