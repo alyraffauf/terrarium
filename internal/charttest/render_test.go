@@ -135,9 +135,9 @@ func TestRenderedDaemonArguments(t *testing.T) {
 }
 
 func TestMetricsPortsAgree(t *testing.T) {
-	for _, app := range []string{"helix", "capensis"} {
+	for _, app := range []string{"helix", "capensis", "cordata", "trifolium"} {
 		for _, n := range []int{9090, 18128} {
-			values := map[string]any{"identifier": "owner.example", "existingSecret": "secret", "pds": []string{"a.example"}, "accounts": []string{"a.example"}, "metrics": map[string]any{"enabled": true, "port": n}}
+			values := map[string]any{"identifier": "owner.example", "existingSecret": "secret", "post": "at://did:example:a/app.bsky.feed.post/key", "pds": []string{"a.example"}, "accounts": []string{"a.example"}, "metrics": map[string]any{"enabled": true, "port": n}}
 			docs, err := render(t, app, values)
 			if err != nil {
 				t.Fatal(err)
@@ -162,9 +162,9 @@ func TestMetricsPortsAgree(t *testing.T) {
 }
 
 func TestMetricsServiceNameFitsHelmReleases(t *testing.T) {
-	for _, app := range []string{"helix", "capensis"} {
+	for _, app := range []string{"helix", "capensis", "cordata", "trifolium"} {
 		t.Run(app, func(t *testing.T) {
-			values := map[string]any{"identifier": "owner.example", "existingSecret": "secret", "pds": []string{"a.example"}, "accounts": []string{"a.example"}, "metrics": map[string]any{"enabled": true}}
+			values := map[string]any{"identifier": "owner.example", "existingSecret": "secret", "post": "at://did:example:a/app.bsky.feed.post/key", "pds": []string{"a.example"}, "accounts": []string{"a.example"}, "metrics": map[string]any{"enabled": true}}
 			names := map[string]bool{}
 			longPrefix := strings.Repeat("x", 52)
 			for _, release := range []string{longPrefix + "a", longPrefix + "b", "east.prod-1", "east-prod.1", "east-prod-1", "1-east"} {
