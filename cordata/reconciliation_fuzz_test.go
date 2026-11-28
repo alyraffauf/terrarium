@@ -34,6 +34,8 @@ type testRepository struct {
 	unavailable         map[string]bool
 	verificationReads   map[string]int
 	deferred, recovered uint64
+	repostLinks         map[string]string
+	reposts             map[string]bool
 	links               map[string]string
 	likes               map[string]bool
 	items               map[string]remoteItem
@@ -71,12 +73,17 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 	q := req.URL.Query()
 	switch strings.TrimPrefix(req.URL.Path, "/xrpc/") {
 	case "blue.microcosm.links.getBacklinks":
-		if q.Get("subject") != post || q.Get("source") != "app.bsky.feed.like:subject.uri" {
+		collection := strings.TrimSuffix(q.Get("source"), ":subject.uri")
+		links := repo.links
+		if collection == repostCollection {
+			links = repo.repostLinks
+		}
+		if q.Get("subject") != post || q.Get("source") != collection+":subject.uri" || (collection != likeCollection && collection != repostCollection) {
 			return nil, fmt.Errorf("wrong backlinks query")
 		}
 		rows := []any{}
-		for did := range repo.links {
-			rows = append(rows, map[string]string{"did": did, "collection": "app.bsky.feed.like", "rkey": "record"})
+		for did := range links {
+			rows = append(rows, map[string]string{"did": did, "collection": collection, "rkey": "record"})
 		}
 		if repo.fault == 7 {
 			if q.Get("cursor") != "" {
@@ -87,6 +94,16 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 		return wire(200, map[string]any{"records": rows})
 	case "blue.microcosm.identity.resolveMiniDoc":
 		return wire(200, map[string]string{"did": q.Get("identifier"), "pds": "https://actor.test"})
+	case "app.bsky.feed.getRepostedBy":
+		actors := []any{}
+		for _, did := range slices.Sorted(maps.Keys(repo.reposts)) {
+			actors = append(actors, map[string]string{"did": did})
+		}
+		page, next, err := window(actors, q.Get("cursor"))
+		if err != nil {
+			return nil, err
+		}
+		return wire(200, map[string]any{"uri": post, "repostedBy": page, "cursor": next})
 	case "app.bsky.feed.getLikes":
 		if q.Get("uri") != post {
 			return nil, fmt.Errorf("wrong post %q", q.Get("uri"))
@@ -134,7 +151,12 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		return wire(200, map[string]any{"records": page, "cursor": next})
 	case "com.atproto.repo.getRecord":
-		if req.URL.Host == "actor.test" && q.Get("collection") == "app.bsky.feed.like" {
+		if req.URL.Host == "actor.test" {
+			collection := q.Get("collection")
+			links := repo.links
+			if collection == repostCollection {
+				links = repo.repostLinks
+			}
 			did := q.Get("repo")
 			if repo.verificationReads != nil {
 				repo.readsMu.Lock()
@@ -144,7 +166,7 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 			if repo.unavailable[did] {
 				return wire(400, map[string]string{"error": "InvalidRequest", "message": "Could not find repo: " + did})
 			}
-			return wire(200, map[string]any{"uri": "at://" + did + "/app.bsky.feed.like/record", "value": map[string]any{"$type": "app.bsky.feed.like", "subject": map[string]string{"uri": repo.links[did], "cid": "bafyreig3iv5ohbzqhbwj3swk6bib7pdry4gderik2x7dg2b5v3ak75sh2e"}}})
+			return wire(200, map[string]any{"uri": "at://" + did + "/" + collection + "/record", "value": map[string]any{"$type": collection, "subject": map[string]string{"uri": links[did], "cid": "bafyreig3iv5ohbzqhbwj3swk6bib7pdry4gderik2x7dg2b5v3ak75sh2e"}}})
 		}
 		v, ok := repo.items[q.Get("rkey")]
 		if !ok {
@@ -371,8 +393,8 @@ func TestUnreachableLikerOnlyProtectsTheirMembership(t *testing.T) {
 
 func TestInterruptedBacklinkWalkPreservesOverdueRetry(t *testing.T) {
 	const actor = "did:example:missing"
-	key := likeRecordKey{actor, "record"}
-	repo := testRepository{fault: 7, postScan: postScan{retries: map[likeRecordKey]verificationRetry{key: {failures: 4}}}, verificationReads: map[string]int{}, unavailable: map[string]bool{actor: true}}
+	key := reactionKey{actor, likeCollection, "record"}
+	repo := testRepository{fault: 7, postScan: postScan{retries: map[reactionKey]verificationRetry{key: {failures: 4}}}, verificationReads: map[string]int{}, unavailable: map[string]bool{actor: true}}
 	if err := repo.scan(t.Context()); err == nil {
 		t.Fatal("expected second page to fail")
 	}
@@ -471,6 +493,50 @@ func FuzzLikerVerificationHistory(f *testing.F) {
 			for i, actor := range actors {
 				if (counts[actor] == 1) != members[i] || counts[actor] > 1 || repo.verificationReads[actor] != probes[i] {
 					t.Fatalf("step %d %s: members=%d probes=%d, want member=%t probes=%d", step, actor, counts[actor], repo.verificationReads[actor], members[i], probes[i])
+				}
+			}
+		}
+	})
+}
+
+func FuzzLikeAndRepostUnion(f *testing.F) {
+	f.Add([]byte{1, 3, 2, 0, 8, 12, 4, 0})
+	f.Add([]byte{4, 24, 9, 16, 0})
+	f.Fuzz(func(t *testing.T, history []byte) {
+		repo := testRepository{likes: map[string]bool{}, reposts: map[string]bool{}, links: map[string]string{}, repostLinks: map[string]string{}, items: map[string]remoteItem{}}
+		expected := map[string]bool{}
+		for _, b := range history[:min(len(history), 32)] {
+			did := fmt.Sprintf("did:example:actor%d", b>>5)
+			delete(repo.likes, did)
+			delete(repo.reposts, did)
+			delete(repo.links, did)
+			delete(repo.repostLinks, did)
+			if b&1 != 0 {
+				repo.likes[did] = true
+			}
+			if b&2 != 0 {
+				repo.reposts[did] = true
+			}
+			if b&4 != 0 {
+				repo.links[did] = post
+			}
+			if b&8 != 0 {
+				repo.repostLinks[did] = post
+			}
+			if b&16 != 0 {
+				repo.links[did] = otherList
+			}
+			expected[did] = b&11 != 0 || b&20 == 4
+			if err := repo.scan(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			counts := map[string]int{}
+			for _, item := range repo.items {
+				counts[item.Subject]++
+			}
+			for actor, want := range expected {
+				if (counts[actor] == 1) != want || counts[actor] > 1 {
+					t.Fatalf("actor %s: got %d items, eligible=%v", actor, counts[actor], want)
 				}
 			}
 		}

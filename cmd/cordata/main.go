@@ -32,7 +32,7 @@ func command() *cobra.Command {
 	config.AutomaticEnv()
 	cmd := &cobra.Command{
 		Use:           "cordata POST_URL [POST_URL...]",
-		Short:         "Maintain one liker list per post",
+		Short:         "Maintain one list per post for likes and reposts",
 		Long:          "Maintain a moderation list for each post. Pass bsky.app post links or AT URIs. Flags override matching CORDATA_ environment variables (replace hyphens with underscores).",
 		Example:       "cordata 'at://bsky.app/app.bsky.feed.post/3mzyk34ho4c27'",
 		Args:          cobra.MinimumNArgs(1),
@@ -66,7 +66,7 @@ func command() *cobra.Command {
 	flags.String("login-pds", "", "List owner's PDS (default: resolve automatically)")
 	flags.String("slingshot", "https://slingshot.aly.town", "Identity resolver URL")
 	flags.String("constellation", palustre.DefaultConstellation, "Constellation backlink index URL")
-	flags.String("appview", "https://public.api.bsky.app", "AppView for post likes")
+	flags.String("appview", "https://public.api.bsky.app", "AppView for post likes and reposts")
 	flags.Duration("rescan-interval", 5*time.Minute, "Time between completed list scans")
 	flags.Duration("write-interval", palustre.DefaultWriteInterval, "Minimum interval between writes")
 	if err := config.BindPFlags(flags); err != nil {

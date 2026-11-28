@@ -6,12 +6,12 @@ Terrarium keeps Bluesky moderation lists up to date. Give it a post, an account,
 
 | If you want to list… | Run | What you get |
 | --- | --- | --- |
-| Everyone who liked a particular post | [Cordata](cordata/README.md) | One list for the post. Cordata checks for new likes and removes accounts whose likes disappear. |
+| Everyone who liked or reposted a particular post | [Cordata](cordata/README.md) | One list for the post. Cordata removes an account once both its like and its repost are gone. |
 | Followers of individual accounts | [Helix](helix/README.md) | A separate list for each target. |
 | Accounts that follow several people in a group | [Trifolium](trifolium/README.md) | One list per group. You choose how many distinct targets an account must follow to qualify. |
 | Accounts hosted on particular servers | [Capensis](capensis/README.md) | A separate list for each PDS. |
 
-For example, give Trifolium three accounts and a threshold of two. Someone who follows any two qualifies. If they unfollow one and only one remains, Trifolium removes them. Helix, Trifolium, and Capensis exclude you and anyone you follow. Cordata counts every liker, including you.
+For example, give Trifolium three accounts and a threshold of two. Someone who follows any two qualifies. If they unfollow one and only one remains, Trifolium removes them. Helix, Trifolium, and Capensis exclude you and anyone you follow. Cordata includes everyone who liked or reposted, including you.
 
 Each list keeps its AT URI across restarts. Its title comes from 1,024 adjective-and-noun combinations, such as `Quiet Meadow`. The description tells subscribers what the list tracks. Publishing a list and subscribing to its moderation actions are separate choices.
 

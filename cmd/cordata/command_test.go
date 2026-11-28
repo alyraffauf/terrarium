@@ -41,6 +41,8 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 					http.Error(w, `{"error":"RecordNotFound"}`, 404)
 				case "/xrpc/blue.microcosm.links.getBacklinks":
 					fmt.Fprint(w, `{"records":[]}`)
+				case "/xrpc/app.bsky.feed.getRepostedBy":
+					fmt.Fprintf(w, `{"uri":%q,"repostedBy":[]}`, post)
 				case "/xrpc/app.bsky.feed.getLikes":
 					if r.URL.Query().Get("uri") != post {
 						t.Error("queried wrong post")

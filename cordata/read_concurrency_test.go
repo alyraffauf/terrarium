@@ -39,7 +39,10 @@ func TestBacklinksOverlapPDSReads(t *testing.T) {
 	defer cancel()
 	likers := map[string]bool{}
 	done := make(chan error, 1)
-	go func() { _, err := scan.backlinks(ctx, api, "https://index.test", likers, time.Now); done <- err }()
+	go func() {
+		_, err := scan.backlinks(ctx, api, "https://index.test", likeCollection, likers, time.Now)
+		done <- err
+	}()
 	for range 2 {
 		select {
 		case <-repo.started:

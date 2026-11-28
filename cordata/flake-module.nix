@@ -15,7 +15,7 @@
         runHook postCheck
       '';
       meta = {
-        description = "Maintain moderation lists of accounts that liked a post";
+        description = "Maintain moderation lists of accounts that liked or reposted a post";
         mainProgram = "cordata";
         license = pkgs.lib.licenses.mit;
         platforms = pkgs.lib.platforms.unix;

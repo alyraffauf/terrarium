@@ -96,7 +96,10 @@ func (owner *ownerSession) reader(ctx context.Context) *xrpc.Client {
 	return &client
 }
 
-type likeRecordKey struct{ did, rkey string }
+const likeCollection = "app.bsky.feed.like"
+const repostCollection = "app.bsky.feed.repost"
+
+type reactionKey struct{ did, collection, rkey string }
 
 type verificationRetry struct {
 	failures int
@@ -105,43 +108,79 @@ type verificationRetry struct {
 
 type postScan struct {
 	post, list string
-	retries    map[likeRecordKey]verificationRetry
+	retries    map[reactionKey]verificationRetry
+}
+
+func appViewActors(ctx context.Context, view *xrpc.Client, post, collection string) (map[string]bool, error) {
+	actors := map[string]bool{}
+	err := palustre.WalkPages(func(cursor string) (*string, error) {
+		var next *string
+		var profiles []*bsky.ActorDefs_ProfileView
+		if collection == likeCollection {
+			page, err := bsky.FeedGetLikes(ctx, view, "", cursor, 100, post)
+			if err != nil {
+				return nil, err
+			}
+			if page.Uri != post || page.Likes == nil {
+				return nil, fmt.Errorf("invalid likes inventory for %s", post)
+			}
+			for _, like := range page.Likes {
+				if like == nil {
+					return nil, fmt.Errorf("missing like")
+				}
+				profiles = append(profiles, like.Actor)
+			}
+			next = page.Cursor
+		} else {
+			page, err := bsky.FeedGetRepostedBy(ctx, view, "", cursor, 100, post)
+			if err != nil {
+				return nil, err
+			}
+			if page.Uri != post || page.RepostedBy == nil {
+				return nil, fmt.Errorf("invalid repost inventory for %s", post)
+			}
+			profiles, next = page.RepostedBy, page.Cursor
+		}
+		for _, actor := range profiles {
+			if actor == nil {
+				return nil, fmt.Errorf("missing actor for %s", collection)
+			}
+			if _, err := syntax.ParseDID(actor.Did); err != nil {
+				return nil, err
+			}
+			actors[actor.Did] = true
+		}
+		return next, nil
+	})
+	return actors, err
 }
 
 func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Client, constellation string, now func() time.Time) error {
 	post, list := scan.post, scan.list
 	partition := api.inventories.request(list)
 	defer partition.close()
-	likers := map[string]bool{}
-	appErr := palustre.WalkPages(func(cursor string) (*string, error) {
-		page, err := bsky.FeedGetLikes(ctx, view, "", cursor, 100, post)
-		if err != nil {
-			return nil, err
+	members := map[string]bool{}
+	var discoveryErr error
+	collections := [...]string{likeCollection, repostCollection}
+	for _, collection := range collections {
+		actors, err := appViewActors(ctx, view, post, collection)
+		if err == nil {
+			maps.Copy(members, actors)
+		} else {
+			discoveryErr = errors.Join(discoveryErr, err)
 		}
-		if page.Uri != post || page.Likes == nil {
-			return nil, fmt.Errorf("invalid likes inventory for %s", post)
-		}
-		for _, like := range page.Likes {
-			if like == nil || like.Actor == nil {
-				return nil, fmt.Errorf("like missing actor")
-			}
-			if _, err := syntax.ParseDID(like.Actor.Did); err != nil {
-				return nil, err
-			}
-			likers[like.Actor.Did] = true
-		}
-		return page.Cursor, nil
-	})
-	if appErr != nil {
-		clear(likers)
 	}
-	uncertain, linkErr := scan.backlinks(ctx, api, constellation, likers, now)
-	discoveryErr := errors.Join(appErr, linkErr)
+	uncertain := map[string]bool{}
+	for _, collection := range collections {
+		deferred, err := scan.backlinks(ctx, api, constellation, collection, members, now)
+		maps.Copy(uncertain, deferred)
+		discoveryErr = errors.Join(discoveryErr, err)
+	}
 	items, err := partition.read(ctx, api.reader(ctx))
 	if err != nil {
 		return err
 	}
-	subjects := maps.Clone(likers)
+	subjects := maps.Clone(members)
 	for did := range items {
 		if discoveryErr == nil && !uncertain[did] {
 			subjects[did] = true
@@ -151,7 +190,7 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	for _, did := range slices.Sorted(maps.Keys(subjects)) {
 		palustre.HealthProgress(ctx)
 		if err := api.write(ctx, func() error {
-			return api.Reconcile(ctx, items, palustre.Membership{Target: post, ListURI: list, DID: did, Include: likers[did]})
+			return api.Reconcile(ctx, items, palustre.Membership{Target: post, ListURI: list, DID: did, Include: members[did]})
 		}); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -164,9 +203,9 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	return errors.Join(firstFailure, discoveryErr)
 }
 
-func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint string, likers map[string]bool, now func() time.Time) (map[string]bool, error) {
-	nextRetries := map[likeRecordKey]verificationRetry{}
-	const collection = "app.bsky.feed.like"
+func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint, collection string, members map[string]bool, now func() time.Time) (map[string]bool, error) {
+	nextRetries := map[reactionKey]verificationRetry{}
+
 	client := &xrpc.Client{Host: endpoint, Client: api.HTTP}
 	pageErr := palustre.WalkPages(func(cursor string) (*string, error) {
 		rows, next, err := palustre.BacklinksPage(ctx, client, scan.post, collection, "subject.uri", cursor)
@@ -174,10 +213,10 @@ func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint
 			return nil, err
 		}
 		byActor := make(map[string][]*palustre.Backlink)
-		seen := make(map[likeRecordKey]bool)
+		seen := make(map[reactionKey]bool)
 		for _, row := range rows {
-			key := likeRecordKey{row.Did, row.Rkey}
-			if likers[row.Did] || seen[key] {
+			key := reactionKey{row.Did, collection, row.Rkey}
+			if members[row.Did] || seen[key] {
 				continue
 			}
 			seen[key] = true
@@ -191,9 +230,9 @@ func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint
 			byActor[row.Did] = append(byActor[row.Did], row)
 		}
 		type result struct {
-			key   likeRecordKey
-			liked bool
-			err   error
+			key     reactionKey
+			matches bool
+			err     error
 		}
 		results := make(chan result, len(rows))
 		api.initSlots.Do(func() { api.readSlots = make(chan struct{}, 4) })
@@ -213,8 +252,8 @@ func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint
 				defer done()
 				defer func() { <-api.readSlots }()
 				for _, row := range records {
-					ok, err := verifyLike(ctx, api, row, scan.post)
-					results <- result{likeRecordKey{row.Did, row.Rkey}, ok, err}
+					ok, err := verifyReaction(ctx, api, row, scan.post)
+					results <- result{reactionKey{row.Did, collection, row.Rkey}, ok, err}
 					if ok || ctx.Err() != nil {
 						break
 					}
@@ -235,15 +274,15 @@ func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint
 				api.VerificationDeferred.Add(1)
 				delay := palustre.VerificationRetryDelay(retry.failures)
 				nextRetries[key] = verificationRetry{failures: retry.failures + 1, due: now().Add(delay)}
-				slog.Warn("like verification deferred", "post", scan.post, "did", key.did, "rkey", key.rkey, "retry_in", delay, "error", verified.err)
+				slog.Warn("reaction verification deferred", "collection", collection, "post", scan.post, "did", key.did, "rkey", key.rkey, "retry_in", delay, "error", verified.err)
 				continue
 			}
 			if retry.failures > 0 {
 				api.VerificationRecovered.Add(1)
 			}
 			delete(scan.retries, key)
-			if verified.liked {
-				likers[key.did] = true
+			if verified.matches {
+				members[key.did] = true
 			}
 		}
 		return next, nil
@@ -251,20 +290,27 @@ func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint
 	if pageErr != nil {
 		// An interrupted walk can omit records still waiting for their retry.
 		for key, retry := range scan.retries {
-			if _, seen := nextRetries[key]; !seen && !likers[key.did] {
+			if _, seen := nextRetries[key]; !seen && !members[key.did] {
 				nextRetries[key] = retry
 			}
+		}
+	}
+	for key, retry := range scan.retries {
+		if key.collection != collection {
+			nextRetries[key] = retry
 		}
 	}
 	scan.retries = nextRetries
 	uncertain := make(map[string]bool, len(nextRetries))
 	for key := range nextRetries {
-		uncertain[key.did] = true
+		if key.collection == collection {
+			uncertain[key.did] = true
+		}
 	}
 	return uncertain, pageErr
 }
 
-func verifyLike(ctx context.Context, api *ownerSession, row *palustre.Backlink, post string) (bool, error) {
+func verifyReaction(ctx context.Context, api *ownerSession, row *palustre.Backlink, post string) (bool, error) {
 	doc, cached, err := api.CachedDID(ctx, row.Did)
 	if err != nil {
 		return false, err
@@ -289,13 +335,19 @@ func verifyLike(ctx context.Context, api *ownerSession, row *palustre.Backlink, 
 		return false, palustre.VerifyRepoReadError(ctx, reader, row.Did, err)
 	}
 	if record.Uri != "at://"+row.Did+"/"+row.Collection+"/"+row.Rkey || record.Value == nil {
-		return false, fmt.Errorf("invalid like record for %s", row.Did)
+		return false, fmt.Errorf("invalid reaction record for %s", row.Did)
 	}
-	like, ok := record.Value.Val.(*bsky.FeedLike)
-	if !ok || like.Subject == nil {
-		return false, fmt.Errorf("invalid like value for %s", row.Did)
+	switch v := record.Value.Val.(type) {
+	case *bsky.FeedLike:
+		if row.Collection == likeCollection && v.Subject != nil {
+			return v.Subject.Uri == post, nil
+		}
+	case *bsky.FeedRepost:
+		if row.Collection == repostCollection && v.Subject != nil {
+			return v.Subject.Uri == post, nil
+		}
 	}
-	return like.Subject.Uri == post, nil
+	return false, fmt.Errorf("invalid %s value for %s", row.Collection, row.Did)
 }
 
 type Config struct {
