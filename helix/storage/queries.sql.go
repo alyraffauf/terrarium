@@ -70,6 +70,22 @@ func (q *Queries) ClearNewFollows(ctx context.Context) error {
 	return err
 }
 
+const currentJob = `-- name: CurrentJob :one
+SELECT EXISTS(SELECT 1 FROM pending WHERE did=? AND generation=?)
+`
+
+type CurrentJobParams struct {
+	Did        string
+	Generation int64
+}
+
+func (q *Queries) CurrentJob(ctx context.Context, arg CurrentJobParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, currentJob, arg.Did, arg.Generation)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const dirtyFollows = `-- name: DirtyFollows :exec
 UPDATE sync_state SET follow_version=follow_version+1 WHERE id=1
 `
@@ -253,16 +269,23 @@ func (q *Queries) NextJob(ctx context.Context, ready int64) (NextJobRow, error) 
 }
 
 const nextJobs = `-- name: NextJobs :many
-WITH priority AS (
-  SELECT p.did,p.generation,p.attempts FROM pending AS p WHERE p.ready<=?1 ORDER BY p.ready,p.did LIMIT 7
+WITH held AS (SELECT CAST(value AS TEXT) AS did FROM json_each(CAST(?1 AS TEXT)) WHERE value IS NOT NULL), priority AS (
+  SELECT p.did,p.generation,p.attempts FROM pending AS p WHERE p.ready<=?2 AND p.did NOT IN (SELECT did FROM held) ORDER BY p.ready,p.did LIMIT ?3
 ), oldest AS (
   SELECT p.did,p.generation,p.attempts FROM pending AS p
-  WHERE p.ready_since<=?1 AND p.ready<=?1 AND p.did NOT IN (SELECT did FROM priority)
-  ORDER BY p.ready_since LIMIT 1
+  WHERE p.ready_since<=?2 AND p.ready<=?2 AND p.did NOT IN (SELECT did FROM priority) AND p.did NOT IN (SELECT did FROM held)
+  ORDER BY p.ready_since LIMIT ?4
 )
 SELECT did,generation,attempts FROM priority
 UNION ALL SELECT did,generation,attempts FROM oldest
 `
+
+type NextJobsParams struct {
+	Busy          string
+	Now           int64
+	PrioritySlots int64
+	OldestSlot    int64
+}
 
 type NextJobsRow struct {
 	Did        string
@@ -272,8 +295,13 @@ type NextJobsRow struct {
 
 // Seven slots retain live-event priority. The last serves the oldest ready
 // account, so sustained event traffic cannot starve backfills or due retries.
-func (q *Queries) NextJobs(ctx context.Context, now int64) ([]NextJobsRow, error) {
-	rows, err := q.db.QueryContext(ctx, nextJobs, now)
+func (q *Queries) NextJobs(ctx context.Context, arg NextJobsParams) ([]NextJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, nextJobs,
+		arg.Busy,
+		arg.Now,
+		arg.PrioritySlots,
+		arg.OldestSlot,
+	)
 	if err != nil {
 		return nil, err
 	}

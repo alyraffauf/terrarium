@@ -16,6 +16,29 @@ import (
 	m "github.com/alyraffauf/terrarium/internal/syncmodel"
 )
 
+// Exercise a single selection from the durable queue without scheduling retries.
+func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *store) error {
+	actors := activeActors(targets)
+	if len(actors) == 0 {
+		return nil
+	}
+	queue := readQueue{ReadPool: followers.NewReadPool[checked](ctx, len(jobs))}
+	defer queue.Close()
+	for _, work := range jobs {
+		queue.start(targets[0].session, db, work, actors)
+	}
+	for range jobs {
+		result, ok := queue.Next(ctx, time.Minute)
+		if !ok {
+			return fmt.Errorf("waiting for job: %v", ctx.Err())
+		}
+		if err := completeCheck(ctx, targets, db, result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func FuzzServiceMembership(f *testing.F) {
 	m.Service(f, false, func(t *testing.T, w *m.World) func(string, bool, int, bool) error {
 		path := t.TempDir() + "/store"
@@ -215,7 +238,7 @@ func TestBatchProgressWhileResolverStalls(t *testing.T) {
 	if err := processBatch(ctx, []*listTarget{{actor: m.Actors[0], session: api, listURI: m.List(0)}}, jobs, db); err != nil {
 		t.Fatal(err)
 	}
-	if api.ChecksCompleted.Load() != 2 || w.RecordCount() != 1 {
+	if api.ChecksCompleted.Load() != 1 || w.RecordCount() != 1 {
 		t.Fatalf("completed %d jobs with %d items", api.ChecksCompleted.Load(), w.RecordCount())
 	}
 }
@@ -311,5 +334,55 @@ func TestSuspendedBatchRetainsJobsUntilTargetResumes(t *testing.T) {
 	}
 	if pending, err := db.queries.PendingCount(ctx); err != nil || pending != 0 {
 		t.Fatalf("pending jobs = %d, err = %v", pending, err)
+	}
+}
+
+// Keep the first reader stalled while more accounts than the pool can hold
+// finish. Every other DID should run once, including the ninth candidate.
+func TestReadPoolRefillsWhileOneCandidateStalls(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	db, err := openStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	const slow = "did:example:candidate0"
+	world := &m.World{BeforeResolve: func(req *http.Request) error {
+		if req.URL.Query().Get("identifier") == slow {
+			<-req.Context().Done()
+			return req.Context().Err()
+		}
+		return nil
+	}}
+	client := &http.Client{Transport: world}
+	api := newSession(Config{Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+	targets := []*listTarget{{actor: m.Actors[0], session: api, listURI: m.List(0)}}
+	queue := readQueue{ReadPool: followers.NewReadPool[checked](ctx, readConcurrency)}
+	defer queue.Close()
+	for i := range readConcurrency + 2 {
+		if err := db.queueScan(ctx, fmt.Sprintf("did:example:candidate%d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	for range readConcurrency + 1 {
+		if err := queue.fill(ctx, targets, db); err != nil {
+			t.Fatal(err)
+		}
+		result, ok := queue.Next(ctx, 5*time.Second)
+		if !ok || result.err != nil || result.work.DID == slow || seen[result.work.DID] {
+			t.Fatalf("unexpected result %+v, ready=%v", result, ok)
+		}
+		seen[result.work.DID] = true
+		if err := completeCheck(ctx, targets, db, result); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !queue.Busy(slow) {
+		t.Fatal("lost stalled reader")
 	}
 }

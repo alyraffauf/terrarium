@@ -2,93 +2,145 @@ package helix
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
-	"sync"
+	"slices"
+
 	"time"
+
+	"github.com/alyraffauf/terrarium/helix/storage"
 
 	"github.com/alyraffauf/terrarium/internal/followers"
 	"github.com/alyraffauf/terrarium/palustre"
 )
 
-// The caller selects at most eight jobs. Public reads overlap, while the caller
-// retains sole ownership of authentication, exclusions, and list writes.
-func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *store) error {
-	actors := make([]string, 0, len(targets))
+const readConcurrency = 8
+
+type checked struct {
+	work    job
+	actors  []string
+	subject subjectState
+	err     error
+}
+
+type readQueue struct {
+	*followers.ReadPool[checked]
+	sinceOldest int
+}
+
+func activeActors(targets []*listTarget) []string {
+	var actors []string
 	for _, target := range targets {
 		if !target.suspended.Load() {
 			actors = append(actors, target.actor)
 		}
 	}
-	if len(actors) == 0 {
-		// Keep live candidates queued while the worker waits for a list to recover.
-		palustre.Pause(ctx, time.Second)
-		return ctx.Err()
-	}
+	return actors
+}
 
-	ctx, cancel := context.WithCancel(ctx)
-	var workers sync.WaitGroup
-	defer func() { cancel(); workers.Wait() }()
-	type checked struct {
-		work    job
-		subject subjectState
-		err     error
+func (q *readQueue) fill(ctx context.Context, targets []*listTarget, db *store) error {
+	actors := activeActors(targets)
+	free := q.Free()
+	if len(actors) == 0 || free == 0 {
+		return nil
 	}
-	results := make(chan checked, len(jobs))
+	busy, err := json.Marshal(q.BusyDIDs())
+	if err != nil {
+		return err
+	}
+	var oldest int64
+	if q.sinceOldest+free >= readConcurrency {
+		oldest = 1
+	}
+	rows, err := db.queries.NextJobs(ctx, storage.NextJobsParams{Busy: string(busy), Now: time.Now().Unix(), PrioritySlots: int64(free) - oldest, OldestSlot: oldest})
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		work := job{DID: row.Did, Generation: row.Generation, Attempts: int(row.Attempts)}
+		q.start(targets[0].session, db, work, actors)
+	}
+	q.sinceOldest = (q.sinceOldest + len(rows)) % readConcurrency
+	return nil
+}
+
+func (q *readQueue) start(api *session, db *store, work job, actors []string) {
+	q.Start(work.DID, func(ctx context.Context) checked {
+		subject, err := api.subject(ctx, db, work.DID, actors...)
+		return checked{work, actors, subject, err}
+	})
+}
+
+var errJobSuperseded = errors.New("membership check superseded")
+
+func checkGeneration(ctx context.Context, db *store, work job) error {
+	current, err := db.queries.CurrentJob(ctx, storage.CurrentJobParams{Did: work.DID, Generation: work.Generation})
+	if err != nil {
+		return err
+	}
+	if !current {
+		return errJobSuperseded
+	}
+	return nil
+}
+
+// Only the owner goroutine refreshes auth and exclusions or publishes records.
+func completeCheck(ctx context.Context, targets []*listTarget, db *store, result checked) error {
 	api := targets[0].session
-	for _, work := range jobs {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			subject, err := api.subject(ctx, db, work.DID, actors...)
-			results <- checked{work, subject, err}
-		}()
+	if !slices.Equal(result.actors, activeActors(targets)) {
+		// A recovered list was absent from this read, or a list was paused.
+		// Leave the job queued for a check against the current target set.
+		return nil
 	}
-	for range jobs {
-		var result checked
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case result = <-results:
+	if err := checkGeneration(ctx, db, result.work); err != nil {
+		if errors.Is(err, errJobSuperseded) {
+			return nil
 		}
-		err := result.err
-		if err == nil {
-			// A follow event may have arrived while a candidate's public reads ran.
-			// Never apply a stale exclusion snapshot to prefetched work.
-			if err := followers.RefreshSnapshot(ctx, db, api.Client, false); err != nil {
-				slog.Error("follow refresh failed", "error", err)
-				if !palustre.Pause(ctx, 10*time.Second) {
-					return ctx.Err()
-				}
-				continue
-			}
-			followed, readErr := db.isFollowed(ctx, result.work.DID)
-			if readErr != nil {
-				return readErr
-			}
-			if result.subject.excluded && !followed && result.work.DID != api.Client.Auth.Did {
-				// An unfollow invalidated the early exclusion check. Leave the job queued.
-				continue
-			}
-			result.subject.excluded = followed || result.work.DID == api.Client.Auth.Did
-			result.subject.beforeWrite = func(ctx context.Context) error { return followers.CheckSnapshot(ctx, db) }
-			err = applySubject(ctx, targets, result.work, result.subject, db)
-		}
-		if errors.Is(err, followers.ErrSnapshotSuperseded) {
-			continue
-		}
-		if err != nil {
-			if ctx.Err() != nil {
+		return err
+	}
+	err := result.err
+	if err == nil {
+		// A follow event may have arrived while a candidate's public reads ran.
+		// Never apply a stale exclusion snapshot to prefetched work.
+		if err := followers.RefreshSnapshot(ctx, db, api.Client, false); err != nil {
+			slog.Error("follow refresh failed", "error", err)
+			if !palustre.Pause(ctx, 10*time.Second) {
 				return ctx.Err()
 			}
-			slog.Warn("membership update failed", "did", result.work.DID, "error", err)
-			if err := db.retry(ctx, result.work); err != nil {
+			return nil
+		}
+		followed, readErr := db.isFollowed(ctx, result.work.DID)
+		if readErr != nil {
+			return readErr
+		}
+		if result.subject.excluded && !followed && result.work.DID != api.Client.Auth.Did {
+			// An unfollow invalidated the early exclusion check. Leave the job queued.
+			return nil
+		}
+		result.subject.excluded = followed || result.work.DID == api.Client.Auth.Did
+		result.subject.beforeWrite = func(ctx context.Context) error {
+			if err := checkGeneration(ctx, db, result.work); err != nil {
 				return err
 			}
-			api.CheckRetries.Add(1)
-		} else {
-			api.ChecksCompleted.Add(1)
+			return followers.CheckSnapshot(ctx, db)
 		}
+		err = applySubject(ctx, targets, result.work, result.subject, db)
+	}
+	if errors.Is(err, followers.ErrSnapshotSuperseded) || errors.Is(err, errJobSuperseded) {
+		return nil
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		slog.Warn("membership update failed", "did", result.work.DID, "error", err)
+		if err := db.retry(ctx, result.work); err != nil {
+			return err
+		}
+		api.CheckRetries.Add(1)
+	} else {
+		api.ChecksCompleted.Add(1)
 	}
 	return nil
 }

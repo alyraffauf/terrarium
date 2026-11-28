@@ -2,6 +2,8 @@ package followers
 
 import (
 	"context"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 )
@@ -28,6 +30,8 @@ func NewReadPool[T any](ctx context.Context, limit int) *ReadPool[T] {
 
 func (p *ReadPool[T]) Free() int            { return cap(p.results) - len(p.busy) }
 func (p *ReadPool[T]) Busy(did string) bool { return p.busy[did] }
+
+func (p *ReadPool[T]) BusyDIDs() []string { return slices.Collect(maps.Keys(p.busy)) }
 
 func (p *ReadPool[T]) Start(did string, read func(context.Context) T) bool {
 	if p.Free() == 0 || p.busy[did] {

@@ -75,12 +75,12 @@ INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value
 -- name: NextJobs :many
 -- Seven slots retain live-event priority. The last serves the oldest ready
 -- account, so sustained event traffic cannot starve backfills or due retries.
-WITH priority AS (
-  SELECT p.did,p.generation,p.attempts FROM pending AS p WHERE p.ready<=sqlc.arg(now) ORDER BY p.ready,p.did LIMIT 7
+WITH held AS (SELECT CAST(value AS TEXT) AS did FROM json_each(CAST(sqlc.arg(busy) AS TEXT)) WHERE value IS NOT NULL), priority AS (
+  SELECT p.did,p.generation,p.attempts FROM pending AS p WHERE p.ready<=sqlc.arg(now) AND p.did NOT IN (SELECT did FROM held) ORDER BY p.ready,p.did LIMIT sqlc.arg(priority_slots)
 ), oldest AS (
   SELECT p.did,p.generation,p.attempts FROM pending AS p
-  WHERE p.ready_since<=sqlc.arg(now) AND p.ready<=sqlc.arg(now) AND p.did NOT IN (SELECT did FROM priority)
-  ORDER BY p.ready_since LIMIT 1
+  WHERE p.ready_since<=sqlc.arg(now) AND p.ready<=sqlc.arg(now) AND p.did NOT IN (SELECT did FROM priority) AND p.did NOT IN (SELECT did FROM held)
+  ORDER BY p.ready_since LIMIT sqlc.arg(oldest_slot)
 )
 SELECT did,generation,attempts FROM priority
 UNION ALL SELECT did,generation,attempts FROM oldest;
@@ -90,3 +90,6 @@ SELECT COUNT(*) FROM pending;
 -- name: OldestReadyAgeSeconds :one
 SELECT CAST(COALESCE(unixepoch()-MIN(ready_since),0) AS INTEGER)
 FROM pending WHERE ready_since<=unixepoch();
+
+-- name: CurrentJob :one
+SELECT EXISTS(SELECT 1 FROM pending WHERE did=? AND generation=?);

@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alyraffauf/terrarium/helix/storage"
 	"github.com/alyraffauf/terrarium/internal/followers"
 )
 
@@ -118,7 +119,7 @@ func TestBatchReservesOldestReadySlot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	rows, err := db.queries.NextJobs(ctx, 100)
+	rows, err := db.queries.NextJobs(ctx, storage.NextJobsParams{Now: 100, Busy: "[]", PrioritySlots: 7, OldestSlot: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

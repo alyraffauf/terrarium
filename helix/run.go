@@ -47,7 +47,8 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	if err := api.Login(ctx); err != nil {
 		return err
 	}
-	if err := db.bind(ctx, "owner", api.Client.Auth.Did); err != nil {
+	api.ownerDID = api.Client.Auth.Did
+	if err := db.bind(ctx, "owner", api.ownerDID); err != nil {
 		return err
 	}
 	targets, err := api.prepareTargets(ctx, db)
@@ -93,6 +94,9 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	}()
 	// Authenticated operations have one owner, keeping token refresh serialized.
 	nextFollows := time.Time{}
+	var nextInventory time.Time
+	reads := readQueue{ReadPool: followers.NewReadPool[checked](ctx, readConcurrency)}
+	defer reads.Close()
 	for ctx.Err() == nil {
 		requested, err := db.takeRescan(ctx)
 		if err != nil {
@@ -122,29 +126,22 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		if forceFollowRefresh {
 			nextFollows = time.Now().Add(5 * time.Minute)
 		}
-		if err := inventory.step(ctx, targets, db, rescan); err != nil {
-			slog.Error("list inventory failed", "error", err)
+		if !time.Now().Before(nextInventory) {
+			if err := inventory.step(ctx, targets, db, rescan); err != nil {
+				slog.Error("list inventory failed", "error", err)
+			}
+			nextInventory = time.Now().Add(time.Second)
 		}
-
-		jobs, err := db.queries.NextJobs(ctx, time.Now().Unix())
-		if err != nil {
+		if err := reads.fill(ctx, targets, db); err != nil {
 			return err
 		}
-		if len(jobs) == 0 {
-			if !palustre.Pause(ctx, time.Second) {
-				break
+		if result, ok := reads.Next(ctx, time.Second); ok {
+			if err := completeCheck(ctx, targets, db, result); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				return err
 			}
-			continue
-		}
-		batch := make([]job, 0, len(jobs))
-		for _, row := range jobs {
-			batch = append(batch, job{DID: row.Did, Generation: row.Generation, Attempts: int(row.Attempts)})
-		}
-		if err := processBatch(ctx, targets, batch, db); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
 		}
 	}
 	return nil
