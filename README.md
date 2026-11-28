@@ -37,6 +37,8 @@ Each Helm chart runs one replica and uses the Recreate strategy so only one proc
 
 The kubelet probes the pod on `health.port` (8081 by default), independently of the Prometheus listener. The startup probe allows up to five minutes for `/livez` to respond. After startup, three consecutive failed liveness checks ten seconds apart trigger a restart. The readiness probe checks `/readyz` every five seconds while the daemon initializes and throughout its lifetime. Liveness tracks local worker progress, including remote requests that fail and enter backoff.
 
+Readiness starts after initialization. A watched worker that stalls for five minutes fails both probes. Initialization has a separate 30-minute stall window. Scheduled sleeps and paced writes extend the deadline. Check stream logs and queue metrics separately for relay freshness and backfill lag.
+
 ## Measure verification cost
 
 All four daemons can serve Prometheus metrics at `/metrics`. Set `--metrics-address=:9090` and configure your scraper. The examples assume a scrape target label named `daemon`.
