@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -19,19 +20,22 @@ const followCollection = palustre.FollowCollection
 type verifyJob struct {
 	did, key, target string
 	id, version      int64
+	attempts         int
+	cached           bool
+	pds              string
 }
 
 func (a *service) claim(ctx context.Context, preferHint bool) (j verifyJob, err error) {
 	err = a.transaction(ctx, func(tx *sql.Tx) error {
 		hint := func() error {
-			return tx.QueryRow(`SELECT id,did,rkey,target FROM hints WHERE due<=unixepoch() AND did NOT IN(SELECT did FROM scanning) ORDER BY due,id LIMIT 1`).Scan(&j.id, &j.did, &j.key, &j.target)
+			return tx.QueryRow(`SELECT id,did,rkey,target,attempts FROM hints WHERE due<=unixepoch() AND did NOT IN(SELECT did FROM scanning) ORDER BY due,id LIMIT 1`).Scan(&j.id, &j.did, &j.key, &j.target, &j.attempts)
 		}
 		scan := func() error {
-			err := tx.QueryRow("SELECT did,version FROM scans WHERE did=? AND due<=unixepoch() AND did NOT IN (SELECT did FROM scanning)", a.owner).Scan(&j.did, &j.version)
+			err := tx.QueryRow("SELECT did,version,attempts FROM scans WHERE did=? AND due<=unixepoch() AND did NOT IN (SELECT did FROM scanning)", a.owner).Scan(&j.did, &j.version, &j.attempts)
 			if !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
-			return tx.QueryRow(`SELECT did,version FROM scans WHERE due<=unixepoch() AND did NOT IN(SELECT did FROM scanning) ORDER BY due,rowid LIMIT 1`).Scan(&j.did, &j.version)
+			return tx.QueryRow(`SELECT did,version,attempts FROM scans WHERE due<=unixepoch() AND did NOT IN(SELECT did FROM scanning) ORDER BY due,rowid LIMIT 1`).Scan(&j.did, &j.version, &j.attempts)
 		}
 		first, second := scan, hint
 		if preferHint {
@@ -74,7 +78,8 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 		return err
 	}
 	defer a.ExecContext(context.WithoutCancel(ctx), "DELETE FROM scanning WHERE did=?", j.did)
-	doc, err := a.api.Resolve(ctx, j.did)
+	doc, cached, err := a.api.CachedDID(ctx, j.did)
+	j.cached = cached
 	delay := 60
 	if err == nil {
 		if release := a.acquireHost(doc.PDS); release != nil {
@@ -92,16 +97,26 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 	if err == nil && delay != 2 {
 		return nil
 	}
+	increment := 0
+	if err != nil {
+		increment = 1
+		if j.did != a.owner {
+			delay = int(palustre.VerificationRetryDelay(j.attempts).Seconds())
+		}
+	}
 	var retry error
 	if j.id != 0 {
-		_, retry = a.ExecContext(ctx, "UPDATE hints SET due=unixepoch()+? WHERE id=?", delay, j.id)
+		_, retry = a.ExecContext(ctx, "UPDATE hints SET attempts=min(6,attempts+?),due=unixepoch()+? WHERE id=?", increment, delay, j.id)
 	} else {
-		_, retry = a.ExecContext(ctx, "UPDATE scans SET due=unixepoch()+? WHERE did=? AND version=?", delay, j.did, j.version)
+		_, retry = a.ExecContext(ctx, "UPDATE scans SET attempts=min(6,attempts+?),due=unixepoch()+? WHERE did=? AND version=?", increment, delay, j.did, j.version)
 	}
-	if err != nil && j.did == a.owner {
-		err = fmt.Errorf("owner follow inventory unavailable; list additions waiting: %w", err)
+	if retry != nil {
+		return errors.Join(err, retry)
 	}
-	return errors.Join(err, retry)
+	if err != nil {
+		slog.Warn("follow verification deferred", "did", j.did, "retry_seconds", delay, "error", err)
+	}
+	return nil
 }
 
 func parseFollow(did, rawURI string, value *lex.LexiconTypeDecoder) (key, subject string, err error) {
@@ -127,6 +142,11 @@ func parseFollow(did, rawURI string, value *lex.LexiconTypeDecoder) (key, subjec
 
 func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) error {
 	record, err := atproto.RepoGetRecord(ctx, c, "", followCollection, j.did, j.key)
+	if j.cached && palustre.MayHaveMoved(err) {
+		if confirmErr := a.api.ConfirmPDS(ctx, j.did, c.Host); confirmErr != nil {
+			return confirmErr
+		}
+	}
 	if err != nil && !palustre.XRPCCode(err, "RecordNotFound") {
 		return err
 	}
@@ -154,8 +174,9 @@ func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) er
 }
 
 func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) error {
+	j.pds = c.Host
 	var cursor string
-	err := a.QueryRowContext(ctx, "SELECT cursor FROM pages WHERE did=? AND version=?", j.did, j.version).Scan(&cursor)
+	err := a.QueryRowContext(ctx, "SELECT cursor FROM pages WHERE did=? AND version=? AND pds=?", j.did, j.version, c.Host).Scan(&cursor)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -172,6 +193,11 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 		return nil
 	})
 	if err != nil {
+		if j.cached && palustre.MayHaveMoved(err) {
+			if confirmErr := a.api.ConfirmPDS(ctx, j.did, c.Host); confirmErr != nil {
+				return confirmErr
+			}
+		}
 		if j.did == a.owner || !unavailableRepo(err) {
 			return err
 		}
@@ -236,11 +262,11 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 			}
 		}
 		if nextCursor != "" {
-			if _, err := tx.Exec("INSERT OR REPLACE INTO pages VALUES(?,?,?)", j.did, j.version, nextCursor); err != nil {
+			if _, err := tx.Exec("INSERT OR REPLACE INTO pages(did,version,cursor,pds) VALUES(?,?,?,?)", j.did, j.version, nextCursor, j.pds); err != nil {
 				return err
 			}
 			// Yield to untouched and overdue candidates, including after a restart.
-			_, err := tx.Exec("UPDATE scans SET due=unixepoch() WHERE did=?", j.did)
+			_, err := tx.Exec("UPDATE scans SET attempts=0,due=unixepoch() WHERE did=?", j.did)
 			return err
 		}
 		if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND target NOT IN (SELECT target FROM partial_targets WHERE did=?)", j.did, j.did); err != nil {

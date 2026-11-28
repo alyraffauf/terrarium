@@ -89,7 +89,7 @@ func (a *cluster) desiredDescription(ctx context.Context) (string, error) {
 	}
 	var handles []string
 	for _, id := range ids {
-		doc, err := a.api.Resolve(ctx, id)
+		doc, _, err := a.api.CachedDID(ctx, id)
 		if err != nil {
 			return "", err
 		}
@@ -134,11 +134,14 @@ func (a *cluster) ensureDescription(ctx context.Context, description string) err
 }
 func (a *cluster) publishWithDescription(ctx context.Context) error {
 	if !time.Now().Before(a.nextDescription) {
+		const interval = 5 * time.Minute
 		description, err := a.desiredDescription(ctx)
+		lookupFailed := err != nil
+		a.descriptionRetry = palustre.ScanRetryDelay(a.descriptionRetry, interval)
+		a.nextDescription = time.Now().Add(a.descriptionRetry)
 		if err != nil {
 			slog.Warn("cluster description lookup", "cluster", a.id, "error", err)
-			a.nextDescription = time.Now().Add(time.Minute)
-			// Validate ownership even during an AppView outage. Reuse a known
+			// Validate ownership even during a resolver outage. Reuse a known
 			// description so a transient failure does not rename an existing list.
 			err = a.QueryRowContext(ctx, "SELECT text FROM descriptions WHERE cluster=? ORDER BY rowid DESC LIMIT 1", a.id).Scan(&description)
 			if errors.Is(err, sql.ErrNoRows) {
@@ -146,16 +149,16 @@ func (a *cluster) publishWithDescription(ctx context.Context) error {
 			} else if err != nil {
 				return err
 			}
-		} else {
-			a.nextDescription = time.Now().Add(5 * time.Minute)
 		}
-		if err := a.ensureDescription(ctx, description); err != nil {
-			a.nextDescription = time.Now().Add(time.Minute)
+		if err = a.ensureDescription(ctx, description); err != nil {
 			if !errors.Is(err, palustre.ErrListUpdate) {
 				a.listValidated = false
 				return err
 			}
 			slog.Warn("cluster description update", "cluster", a.id, "error", err)
+		} else if !lookupFailed {
+			a.descriptionRetry = 0
+			a.nextDescription = time.Now().Add(interval)
 		}
 		a.listValidated = true
 	}

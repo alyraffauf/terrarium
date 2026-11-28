@@ -56,11 +56,11 @@ func (a *service) resumeStream(ctx context.Context) (int64, error) {
 func (a *service) scheduleStreamRecovery(tx *sql.Tx) error {
 	if _, err := tx.Exec(`
 DELETE FROM cursor;
-UPDATE scans SET version=version+1,due=0;
+UPDATE scans SET version=version+1,attempts=0,due=0;
 INSERT OR IGNORE INTO scans(did) SELECT DISTINCT actor FROM edges;
 INSERT OR IGNORE INTO scans(did) SELECT DISTINCT did FROM hints;
 DELETE FROM hints;
-UPDATE discovery_schedule SET due=0,generation=generation+1,cursor='',turn=0,retrying=0;
+UPDATE discovery_schedule SET due=0,generation=generation+1,cursor='',turn=0,retrying=0,retry_seconds=0;
 DELETE FROM discovery_cursors;
 UPDATE inventory_schedule SET due=0 WHERE id=1;
 `); err != nil {
@@ -88,7 +88,9 @@ func (a *service) signalBackfill() {
 }
 
 func (a *service) listen(ctx context.Context) {
+	var delay time.Duration
 	for ctx.Err() == nil {
+		started := time.Now()
 		seq, err := a.resumeStream(ctx)
 		if err == nil {
 			err = palustre.Stream(ctx, a.stream, seq, func(raw []byte) error { return a.ingest(ctx, raw) })
@@ -104,8 +106,9 @@ func (a *service) listen(ctx context.Context) {
 				err = errors.Join(err, recovery)
 			}
 		}
-		slog.Warn("reconnecting Jetstream", "error", err)
-		palustre.Pause(ctx, 2*time.Second)
+		delay = palustre.StreamRetryDelay(delay, time.Since(started))
+		slog.Warn("reconnecting Jetstream", "error", err, "retry_in", delay)
+		palustre.Pause(ctx, delay)
 	}
 }
 
@@ -226,6 +229,6 @@ OR EXISTS(SELECT 1 FROM scans WHERE did=?1)`, p.Did, p.Rkey).Scan(&tracked)
 		}
 	}
 	// Invalidate any inventory started before this record changed.
-	_, err := tx.Exec("UPDATE scans SET version=version+1,due=0 WHERE did=?", p.Did)
+	_, err := tx.Exec("UPDATE scans SET version=version+1,attempts=0,due=0 WHERE did=?", p.Did)
 	return err
 }

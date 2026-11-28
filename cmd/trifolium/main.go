@@ -65,7 +65,15 @@ func (a *cluster) publish(ctx context.Context) error {
 		return err
 	}
 	if err != nil {
-		_, retryErr := a.ExecContext(ctx, "INSERT OR REPLACE INTO retries VALUES(?,?,unixepoch()+60)", a.id, did)
+		retryErr := a.transaction(ctx, func(tx *sql.Tx) error {
+			var attempts int
+			err := tx.QueryRow("SELECT attempts FROM retries WHERE cluster=? AND did=?", a.id, did).Scan(&attempts)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			_, err = tx.Exec("INSERT OR REPLACE INTO retries(cluster,did,due,attempts) VALUES(?,?,unixepoch()+?,?)", a.id, did, int64(palustre.MembershipRetryDelay(attempts).Seconds()), min(16, attempts+1))
+			return err
+		})
 		return errors.Join(err, retryErr)
 	}
 	return a.transaction(ctx, func(tx *sql.Tx) error {
@@ -172,12 +180,15 @@ func run(ctx context.Context) error {
 	}
 	wg.Go(func() {
 		var nextAudit time.Time
+		var auditDelay time.Duration
 		for ctx.Err() == nil {
 			if !time.Now().Before(nextAudit) {
 				if err := a.auditMembers(ctx, lists); err != nil {
 					slog.Warn("list-item inventory", "error", err)
-					nextAudit = time.Now().Add(time.Minute)
+					auditDelay = palustre.ScanRetryDelay(auditDelay, a.interval)
+					nextAudit = time.Now().Add(auditDelay)
 				} else {
+					auditDelay = 0
 					nextAudit = time.Now().Add(a.interval)
 				}
 			}

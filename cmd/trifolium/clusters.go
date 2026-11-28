@@ -22,10 +22,11 @@ type clusterConfig struct {
 }
 type cluster struct {
 	*service
-	id, list        string
-	threshold       int
-	nextDescription time.Time
-	listValidated   bool
+	id, list         string
+	threshold        int
+	nextDescription  time.Time
+	descriptionRetry time.Duration
+	listValidated    bool
 }
 
 func listURI(owner, id string) string {
@@ -185,7 +186,7 @@ func reverifyClusterMembers(tx *sql.Tx, id string, targets map[string]bool) erro
 			return err
 		}
 		_, err := tx.Exec(`INSERT INTO scans(did) SELECT did FROM published WHERE cluster=?
-ON CONFLICT(did) DO UPDATE SET version=version+1,due=0`, id)
+ON CONFLICT(did) DO UPDATE SET version=version+1,attempts=0,due=0`, id)
 		return err
 	}
 	return nil

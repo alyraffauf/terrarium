@@ -316,3 +316,29 @@ func TestUnavailableFollowInventory(t *testing.T) {
 		})
 	}
 }
+
+func TestFailedVerificationReleasesWorkerAndPersistsBackoff(t *testing.T) {
+	a := openStore(t, ":memory:")
+	configure(t, a)
+	execute(t, a, "DELETE FROM scans")
+	connect(a, func(*http.Request) (*http.Response, error) { return reply(503, `{"error":"Unavailable"}`), nil })
+	a.api.HTTP = a.api.Client.Client
+	a.api.Config.Slingshot = "https://resolver.invalid"
+	for _, did := range []string{actor, a.owner} {
+		execute(t, a, "INSERT INTO scans(did) VALUES(?)", did)
+		for i := range 8 {
+			requireOK(t, a.verify(t.Context(), false))
+			var attempts, delay, claimed int
+			requireOK(t, a.QueryRow("SELECT attempts,due-unixepoch(),(SELECT count(*) FROM scanning) FROM scans WHERE did=?", did).Scan(&attempts, &delay, &claimed))
+			want := min(3600, 60<<i)
+			if did == a.owner {
+				want = 60
+			}
+			if attempts != min(6, i+1) || claimed != 0 || delay > want || delay < want-1 {
+				t.Fatalf("attempt %d: attempts=%d delay=%d claimed=%d", i, attempts, delay, claimed)
+			}
+			execute(t, a, "UPDATE scans SET due=0 WHERE did=?", did)
+		}
+		execute(t, a, "DELETE FROM scans WHERE did=?", did)
+	}
+}

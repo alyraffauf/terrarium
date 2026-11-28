@@ -77,3 +77,5 @@ helm upgrade --install trifolium ./trifolium/charts/trifolium \
 The [chart values](charts/trifolium/values.yaml) cover cluster settings, endpoints, image tags, and storage. The chart runs one replica, uses the `Recreate` rollout strategy, and retains its PVC on uninstall. Set `persistence.existingClaim` to reuse a volume.
 
 Set `--constellation` or the Helm value `constellation` to override the backlink endpoint.
+
+Verification workers reuse successful Slingshot DID lookups for up to five minutes. Each daemon process caches at most 8,192 identities. A failed verification job retries after one minute, doubling on consecutive failures up to one hour. Owner inventory failures retry every minute because a pending owner scan pauses additions. Reaching the two-read limit for a PDS defers that job for two seconds without counting it as a failure.

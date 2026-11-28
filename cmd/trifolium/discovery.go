@@ -34,6 +34,7 @@ type backlink struct {
 }
 
 type discoveryJob struct {
+	retrySeconds        int64
 	target, cursor      string
 	backlinks, retrying bool
 	due, generation     int64
@@ -111,6 +112,7 @@ func (a *service) saveDiscoveryPage(ctx context.Context, job discoveryJob, next 
 				next = ""
 			}
 		}
+		var retrySeconds int64
 		due, retrying := now.Unix(), false
 		for _, record := range records {
 			var err error
@@ -129,7 +131,9 @@ func (a *service) saveDiscoveryPage(ctx context.Context, job discoveryJob, next 
 			}
 		} else {
 			slog.Warn("follower discovery", "target", job.target, "constellation", job.backlinks, "error", pageErr)
-			due = now.Add(time.Minute).Unix()
+			delay := palustre.ScanRetryDelay(time.Duration(job.retrySeconds)*time.Second, a.interval)
+			retrySeconds = int64(delay.Seconds())
+			due = now.Add(delay).Unix()
 			// Retry a failed continuation once. A cursor can expire between pages.
 			if fetchFailed && job.cursor != "" && !job.retrying {
 				next, retrying = job.cursor, true
@@ -140,13 +144,13 @@ func (a *service) saveDiscoveryPage(ctx context.Context, job discoveryJob, next 
 				return err
 			}
 		}
-		_, err = tx.Exec(`UPDATE discovery_schedule SET cursor=?,due=?,retrying=?,turn=(SELECT max(turn)+1 FROM discovery_schedule)
-			WHERE target=? AND backlinks=?`, next, due, retrying, job.target, job.backlinks)
+		_, err = tx.Exec(`UPDATE discovery_schedule SET cursor=?,due=?,retrying=?,retry_seconds=?,turn=(SELECT max(turn)+1 FROM discovery_schedule)
+			WHERE target=? AND backlinks=?`, next, due, retrying, retrySeconds, job.target, job.backlinks)
 		return err
 	})
 }
 
-const dirty = `INSERT INTO scans(did) VALUES(?) ON CONFLICT(did) DO UPDATE SET version=version+1,due=0`
+const dirty = `INSERT INTO scans(did) VALUES(?) ON CONFLICT(did) DO UPDATE SET version=version+1,attempts=0,due=0`
 
 func (a *service) backfill(ctx context.Context) {
 	for ctx.Err() == nil {
@@ -194,9 +198,9 @@ func (a *service) backfillStep(ctx context.Context) (time.Duration, error) {
 	}
 
 	var job discoveryJob
-	err = a.QueryRowContext(ctx, `SELECT target,backlinks,due,generation,cursor,retrying
+	err = a.QueryRowContext(ctx, `SELECT target,backlinks,due,generation,cursor,retrying,retry_seconds
 		FROM discovery_schedule ORDER BY due,turn,target,backlinks LIMIT 1`).
-		Scan(&job.target, &job.backlinks, &job.due, &job.generation, &job.cursor, &job.retrying)
+		Scan(&job.target, &job.backlinks, &job.due, &job.generation, &job.cursor, &job.retrying, &job.retrySeconds)
 	if err != nil {
 		return 0, err
 	}
