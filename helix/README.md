@@ -46,7 +46,7 @@ Helix backfills followers from AppView and Constellation at startup and every `-
 
 Owner follow and unfollow events refresh exclusions, with a five-minute fallback. Failed exclusion fetches pause membership changes until a complete snapshot succeeds. Restarts resume the saved stream cursor. A stream gap triggers a new backfill. Each index has its own retry schedule. Set `--constellation` to override the backlink endpoint.
 
-Helix checks up to eight accounts concurrently and stops reading a candidate's follows once all target accounts are found. List writes remain serialized. Once a minute, `membership progress` logs the pending count and process totals for completed checks, additions, removals, and retries. Pending includes in-flight checks and delayed retries.
+Helix checks up to eight accounts concurrently and stops reading a candidate's follows once all target accounts are found. List writes remain serialized. Once a minute, `membership progress` logs the pending count and process totals for completed checks, additions, removals, and retries. Pending includes in-flight checks and delayed retries. `oldest_ready_age_seconds` measures how long the oldest job has been eligible to run, including time spent in flight. It reads zero when every job is delayed or the queue is empty. On upgrade, existing priority events start aging from the migration time. `unique_completed_last_minute` counts distinct accounts removed from the queue after successful checks in the past 60 seconds. A superseded generation contributes only after its replacement finishes. The window starts empty on restart.
 
 Successful writes log `list item added` or `list item removed` with a timestamp, account DID, target, list URI, and record key. Removal `reason` distinguishes `not_eligible` from `duplicate` cleanup. Keep these logs to retain membership history.
 
@@ -58,7 +58,7 @@ Set `--metrics-address=:9090` to serve Prometheus metrics at `/metrics`. The lis
 
 The endpoint exports `terrarium_pending_accounts`, `terrarium_checks_completed_total`, `terrarium_check_retries_total`, `terrarium_members_added_total`, and `terrarium_members_removed_total`. Counters reset on restart. Removals include duplicate cleanup. Metrics contain no account identifiers.
 
-For Helm, set `metrics.enabled=true`. The chart adds a metrics Service and pod scrape annotations on port 9090. Configure your scraper to discover those annotations or the Service. Metrics remain available while membership checks wait on remote servers.
+For Helm, set `metrics.enabled=true`. The chart adds a metrics Service and pod scrape annotations on port 9090. Configure your scraper to discover those annotations or the Service. Scrape `terrarium_oldest_ready_job_age_seconds` and `terrarium_unique_accounts_completed_last_minute` to track whether the queue is keeping up. Metrics remain available while membership checks wait on remote servers.
 
 ## Deploy
 

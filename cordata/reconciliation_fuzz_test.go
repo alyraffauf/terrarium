@@ -28,11 +28,14 @@ type remoteItem struct {
 	Subject string `json:"subject"`
 }
 type testRepository struct {
-	links  map[string]string
-	likes  map[string]bool
-	items  map[string]remoteItem
-	fault  byte
-	writes int
+	postScan          postScan
+	unavailable       map[string]bool
+	verificationReads map[string]int
+	links             map[string]string
+	likes             map[string]bool
+	items             map[string]remoteItem
+	fault             byte
+	writes            int
 }
 
 func wire(status int, body any) (*http.Response, error) {
@@ -71,6 +74,12 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 		rows := []any{}
 		for did := range repo.links {
 			rows = append(rows, map[string]string{"did": did, "collection": "app.bsky.feed.like", "rkey": "record"})
+		}
+		if repo.fault == 7 {
+			if q.Get("cursor") != "" {
+				return wire(503, map[string]string{"error": "Unavailable"})
+			}
+			return wire(200, map[string]any{"records": rows, "cursor": "next"})
 		}
 		return wire(200, map[string]any{"records": rows})
 	case "blue.microcosm.identity.resolveMiniDoc":
@@ -124,6 +133,12 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 	case "com.atproto.repo.getRecord":
 		if req.URL.Host == "actor.test" && q.Get("collection") == "app.bsky.feed.like" {
 			did := q.Get("repo")
+			if repo.verificationReads != nil {
+				repo.verificationReads[did]++
+			}
+			if repo.unavailable[did] {
+				return wire(400, map[string]string{"error": "InvalidRequest", "message": "Could not find repo: " + did})
+			}
 			return wire(200, map[string]any{"uri": "at://" + did + "/app.bsky.feed.like/record", "value": map[string]any{"$type": "app.bsky.feed.like", "subject": map[string]string{"uri": repo.links[did], "cid": "bafyreig3iv5ohbzqhbwj3swk6bib7pdry4gderik2x7dg2b5v3ak75sh2e"}}})
 		}
 		v, ok := repo.items[q.Get("rkey")]
@@ -160,10 +175,12 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 }
 
-func (repo *testRepository) scan(ctx context.Context) error {
+func (repo *testRepository) scan(ctx context.Context) error { return repo.scanAt(ctx, time.Now()) }
+func (repo *testRepository) scanAt(ctx context.Context, now time.Time) error {
 	client := &xrpc.Client{Host: "https://repo.test", Client: &http.Client{Transport: repo}, Auth: &xrpc.AuthInfo{Did: owner}}
 	api := &palustre.Session{HTTP: client.Client, Client: client, Refreshed: time.Now(), Config: palustre.Config{WriteInterval: time.Nanosecond}}
-	return syncPost(ctx, &ownerSession{Session: api}, client, client.Host, post, list)
+	repo.postScan.post, repo.postScan.list = post, list
+	return repo.postScan.sync(ctx, &ownerSession{Session: api}, client, client.Host, func() time.Time { return now })
 }
 
 func FuzzLikerMembership(f *testing.F) {
@@ -282,18 +299,165 @@ func FuzzPostReference(f *testing.F) {
 	})
 }
 
-func TestVerifiedBacklinksDuringAppViewFailure(t *testing.T) {
-	const liker = "did:example:liker"
-	repo := testRepository{likes: map[string]bool{}, links: map[string]string{liker: post, "did:example:other": otherList}, items: map[string]remoteItem{"old": {Type: palustre.ItemCollection, List: list, Subject: "did:example:old"}}, fault: 2}
-	if err := repo.scan(t.Context()); err == nil {
-		t.Fatal("incomplete discovery reported success")
+func TestVerifiedBacklinksDuringIncompleteDiscovery(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fault byte
+	}{{"incomplete AppView", 2}, {"incomplete Constellation", 7}} {
+		t.Run(tc.name, func(t *testing.T) {
+			const liker = "did:example:liker"
+			repo := testRepository{likes: map[string]bool{}, links: map[string]string{liker: post, "did:example:other": otherList}, items: map[string]remoteItem{"old": {Type: palustre.ItemCollection, List: list, Subject: "did:example:old"}}, fault: tc.fault}
+			if err := repo.scan(t.Context()); err == nil {
+				t.Fatal("incomplete discovery reported success")
+			}
+			if len(repo.items) != 2 || repo.items["old"].Subject == "" {
+				t.Fatalf("lost existing member: %v", repo.items)
+			}
+			for key, item := range repo.items {
+				if key != "old" && item.Subject != liker {
+					t.Fatalf("wrong backlink member: %v", item)
+				}
+			}
+		})
 	}
-	if len(repo.items) != 2 || repo.items["old"].Subject == "" {
-		t.Fatalf("lost existing member: %v", repo.items)
+}
+
+func TestUnreachableLikerOnlyProtectsTheirMembership(t *testing.T) {
+	const missing = "did:example:missing"
+	const missingNew = "did:example:missingnew"
+	const added = "did:example:added"
+	const stale = "did:example:stale"
+	repo := testRepository{
+		links:             map[string]string{missing: post, missingNew: post, added: post},
+		unavailable:       map[string]bool{missing: true, missingNew: true},
+		verificationReads: map[string]int{},
+		items:             map[string]remoteItem{"keep": {palustre.ItemCollection, list, missing}, "remove": {palustre.ItemCollection, list, stale}},
+	}
+	if err := repo.scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.items) != 2 || repo.items["keep"].Subject != missing {
+		t.Fatalf("want existing unresolved liker and confirmed new liker, got %v", repo.items)
 	}
 	for key, item := range repo.items {
-		if key != "old" && item.Subject != liker {
-			t.Fatalf("wrong backlink member: %v", item)
+		if key != "keep" && item.Subject != added {
+			t.Fatal("unexpected member", item)
 		}
 	}
+	// Replaying immediately must leave the same two members without probing an
+	// unreachable PDS on every scan. Once the index drops its backlink, the
+	// stale retry must no longer protect an existing member.
+	if err := repo.scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if repo.verificationReads[missing] != 1 || repo.verificationReads[missingNew] != 1 {
+		t.Fatal("retried before due", repo.verificationReads)
+	}
+	delete(repo.links, missing)
+	if err := repo.scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := repo.items["keep"]; ok {
+		t.Fatal("stale verification retry prevented removal")
+	}
+}
+
+func TestInterruptedBacklinkWalkPreservesOverdueRetry(t *testing.T) {
+	const actor = "did:example:missing"
+	key := likeRecordKey{actor, "record"}
+	repo := testRepository{fault: 7, postScan: postScan{retries: map[likeRecordKey]verificationRetry{key: {failures: 4}}}, verificationReads: map[string]int{}, unavailable: map[string]bool{actor: true}}
+	if err := repo.scan(t.Context()); err == nil {
+		t.Fatal("expected second page to fail")
+	}
+	repo.fault = 0
+	repo.links = map[string]string{actor: post}
+	if err := repo.scan(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := repo.postScan.retries[key].failures; got != 5 {
+		t.Fatalf("failure count after interrupted walk = %d, want 5", got)
+	}
+}
+
+// Each step changes one external fact or advances the clock, then runs a scan. The high bit interrupts backlink pagination.
+func FuzzLikerVerificationHistory(f *testing.F) {
+	f.Add([]byte{0, 2, 3, 5, 5, 4, 1})          // Keep a member during an outage, then recover.
+	f.Add([]byte{2, 0, 8, 3, 5, 5, 1, 0, 6, 7}) // Retry a newcomer while another joins.
+	f.Add([]byte{0, 129, 1})                    // Delay removal until a complete scan.
+	f.Add([]byte{2, 0, 129, 128, 3, 5})         // Preserve a pending retry across a missing page.
+	f.Fuzz(func(t *testing.T, history []byte) {
+		repo := testRepository{likes: map[string]bool{}, links: map[string]string{}, unavailable: map[string]bool{}, verificationReads: map[string]int{}, items: map[string]remoteItem{}}
+		var members [3]bool
+		var probes, nextProbe, delay [3]int
+		minute := 0
+		actors := [3]string{"did:example:a", "did:example:b", "did:example:c"}
+		for step, b := range history[:min(32, len(history))] {
+			previousMembers, previousWrites := members, repo.writes
+			interrupted := b&128 != 0
+			repo.fault = 0
+			if interrupted {
+				repo.fault = 7
+			}
+			did := actors[int((b&127)/8)%len(actors)]
+			switch b % 8 {
+			case 0:
+				repo.links[did] = post
+			case 1:
+				delete(repo.links, did)
+			case 2:
+				repo.unavailable[did] = true
+			case 3:
+				delete(repo.unavailable, did)
+			case 4:
+				minute += 60
+			case 5:
+				minute++
+			case 6:
+				repo.likes[did] = true
+			case 7:
+				delete(repo.likes, did)
+			}
+			for i, actor := range actors {
+				switch {
+				case !repo.likes[actor] && repo.links[actor] == "" && interrupted:
+					continue
+				case repo.likes[actor] || repo.links[actor] == "":
+					members[i] = repo.likes[actor]
+					delay[i] = 0
+					nextProbe[i] = 0
+				case minute >= nextProbe[i]:
+					probes[i]++
+					if repo.unavailable[actor] {
+						delay[i] = min(60, max(1, 2*delay[i]))
+						nextProbe[i] = minute + delay[i]
+					} else {
+						members[i] = true
+						delay[i] = 0
+						nextProbe[i] = 0
+					}
+				}
+			}
+			if err := repo.scanAt(t.Context(), time.Unix(int64(minute)*60, 0)); (err != nil) != interrupted {
+				t.Fatalf("step %d: interrupted=%t, scan error=%v", step, interrupted, err)
+			}
+			writes := 0
+			for i := range members {
+				if members[i] != previousMembers[i] {
+					writes++
+				}
+			}
+			if got := repo.writes - previousWrites; got != writes {
+				t.Fatalf("step %d: membership writes=%d, want %d", step, got, writes)
+			}
+			counts := map[string]int{}
+			for _, item := range repo.items {
+				counts[item.Subject]++
+			}
+			for i, actor := range actors {
+				if (counts[actor] == 1) != members[i] || counts[actor] > 1 || repo.verificationReads[actor] != probes[i] {
+					t.Fatalf("step %d %s: members=%d probes=%d, want member=%t probes=%d", step, actor, counts[actor], repo.verificationReads[actor], members[i], probes[i])
+				}
+			}
+		}
+	})
 }

@@ -80,7 +80,7 @@ func (q *Queries) DirtyFollows(ctx context.Context) error {
 }
 
 const enqueueEvent = `-- name: EnqueueEvent :exec
-INSERT INTO pending(did,ready) VALUES(?,0) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0
+INSERT INTO pending(did,ready,ready_since) VALUES(?,0,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since)
 `
 
 func (q *Queries) EnqueueEvent(ctx context.Context, did string) error {
@@ -88,7 +88,7 @@ func (q *Queries) EnqueueEvent(ctx context.Context, did string) error {
 	return err
 }
 
-const finishJob = `-- name: FinishJob :exec
+const finishJob = `-- name: FinishJob :execrows
 DELETE FROM pending WHERE did=? AND generation=?
 `
 
@@ -97,9 +97,12 @@ type FinishJobParams struct {
 	Generation int64
 }
 
-func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) error {
-	_, err := q.db.ExecContext(ctx, finishJob, arg.Did, arg.Generation)
-	return err
+func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finishJob, arg.Did, arg.Generation)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const forgetMember = `-- name: ForgetMember :exec
@@ -282,6 +285,18 @@ func (q *Queries) NextJobs(ctx context.Context, ready int64) ([]NextJobsRow, err
 	return items, nil
 }
 
+const oldestReadyAgeSeconds = `-- name: OldestReadyAgeSeconds :one
+SELECT CAST(COALESCE(unixepoch()-MIN(ready_since),0) AS INTEGER)
+FROM pending WHERE ready_since<=unixepoch()
+`
+
+func (q *Queries) OldestReadyAgeSeconds(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, oldestReadyAgeSeconds)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const pendingCount = `-- name: PendingCount :one
 SELECT COUNT(*) FROM pending
 `
@@ -294,10 +309,10 @@ func (q *Queries) PendingCount(ctx context.Context) (int64, error) {
 }
 
 const queueFollowChanges = `-- name: QueueFollowChanges :exec
-INSERT INTO pending(did)
-SELECT did FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)
-UNION SELECT did FROM (SELECT did FROM new_follows EXCEPT SELECT did FROM follows) WHERE true
-ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0
+INSERT INTO pending(did,ready_since)
+SELECT did,unixepoch() FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)
+UNION SELECT did,unixepoch() FROM (SELECT did FROM new_follows EXCEPT SELECT did FROM follows) WHERE true
+ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since)
 `
 
 func (q *Queries) QueueFollowChanges(ctx context.Context) error {
@@ -306,7 +321,7 @@ func (q *Queries) QueueFollowChanges(ctx context.Context) error {
 }
 
 const queueMembers = `-- name: QueueMembers :exec
-INSERT INTO pending(did,ready) SELECT DISTINCT did,unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1
+INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1
 `
 
 func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
@@ -315,7 +330,7 @@ func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
 }
 
 const queueScan = `-- name: QueueScan :exec
-INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1
+INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1
 `
 
 func (q *Queries) QueueScan(ctx context.Context, did string) error {
@@ -381,7 +396,7 @@ func (q *Queries) ResetStream(ctx context.Context, cursorUs int64) error {
 }
 
 const retryJob = `-- name: RetryJob :exec
-UPDATE pending SET attempts=attempts+1,ready=? WHERE did=? AND generation=?
+UPDATE pending SET attempts=attempts+1,ready=?1,ready_since=?1 WHERE did=?2 AND generation=?3
 `
 
 type RetryJobParams struct {

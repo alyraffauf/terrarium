@@ -16,7 +16,7 @@ The `maintaining list` log entry shows the list's AT URI. Subscribe to the list 
 
 ## Membership updates
 
-Cordata combines AppView likes with Constellation backlinks. For likers found only through Constellation, it checks the like record on the actor’s PDS. If either scan fails, Cordata can add confirmed likers and retains existing members. After a complete scan, it also removes accounts absent from both sources. Set `--constellation` to use a different backlink endpoint. The owner's repository stores the list and its items across restarts.
+Cordata combines AppView likes with Constellation backlinks. For likers found only through Constellation, it checks the like record on the actor’s PDS. If a liker's PDS is unreachable, Cordata preserves that account’s existing membership and retries verification. Other accounts can still be added or removed. If AppView or Constellation fails to return a complete set of pages, Cordata can add confirmed likers but defers removals for that list. Posts ready before the owner’s list-item scan starts share that scan. Each post uses only its own items. An incomplete inventory defers reconciliation for every post sharing it. Set `--constellation` to use a different backlink endpoint. The owner's repository stores the list and its items across restarts.
 
 Cordata waits five minutes after a successful pass by default. Failures retry after one minute, doubling on consecutive failures up to the normal scan interval (with a one-minute floor and a one-hour ceiling). Set `--rescan-interval` to change the delay after successful passes. Set `--write-interval` to change the minimum interval between writes, which defaults to ten seconds.
 

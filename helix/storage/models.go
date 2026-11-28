@@ -33,6 +33,7 @@ type Pending struct {
 	Generation int64
 	Attempts   int64
 	Ready      int64
+	ReadySince int64
 }
 
 type SyncState struct {

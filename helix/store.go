@@ -13,8 +13,9 @@ import (
 )
 
 type store struct {
-	conn    *sql.DB
-	queries *storage.Queries
+	conn        *sql.DB
+	queries     *storage.Queries
+	completions recentCompletions
 }
 type job struct {
 	DID        string
@@ -172,7 +173,11 @@ func (db *store) next(ctx context.Context) (job, error) {
 }
 func (db *store) finish(ctx context.Context, work job) error {
 	// A newer event must survive a request that was already in flight.
-	return db.queries.FinishJob(ctx, storage.FinishJobParams{Did: work.DID, Generation: work.Generation})
+	removed, err := db.queries.FinishJob(ctx, storage.FinishJobParams{Did: work.DID, Generation: work.Generation})
+	if err == nil && removed == 1 {
+		db.completions.record(work.DID, time.Now())
+	}
+	return err
 }
 func (db *store) retry(ctx context.Context, work job) error {
 	delay := palustre.MembershipRetryDelay(work.Attempts)
