@@ -34,11 +34,18 @@ func (api *Session) CachedDID(ctx context.Context, did string) (MiniDoc, bool, e
 			return entry.doc, true, nil
 		}
 	}
+	doc, err := api.RefreshDID(ctx, did)
+	return doc, false, err
+}
+
+func (api *Session) RefreshDID(ctx context.Context, did string) (MiniDoc, error) {
+	cache := api.identities.lru()
+	cache.Remove(did)
 	doc, err := api.Resolve(ctx, did)
 	if err == nil {
 		cache.Add(did, cachedIdentity{doc, time.Now().Add(5 * time.Minute)})
 	}
-	return doc, false, err
+	return doc, err
 }
 
 // Missing repositories have different error codes across PDS implementations.
@@ -50,8 +57,7 @@ func MayHaveMoved(err error) bool {
 // ConfirmPDS rechecks a cached route before accepting a missing or inactive
 // record. A move leaves the job pending so the next read uses the new host.
 func (api *Session) ConfirmPDS(ctx context.Context, did, host string) error {
-	api.identities.lru().Remove(did)
-	doc, _, err := api.CachedDID(ctx, did)
+	doc, err := api.RefreshDID(ctx, did)
 	if err != nil {
 		return err
 	}

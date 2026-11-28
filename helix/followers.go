@@ -76,8 +76,16 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 	client := &xrpc.Client{Host: host, Client: api.HTTP}
 	active, err := palustre.RepoActive(ctx, client, did)
 	if cached && (palustre.MayHaveMoved(err) || err == nil && !active) {
-		if confirmErr := api.ConfirmPDS(ctx, did, host); confirmErr != nil {
-			return subject, confirmErr
+		current, refreshErr := api.RefreshDID(ctx, did)
+		if refreshErr != nil {
+			return subject, refreshErr
+		}
+		if current.PDS != host {
+			if err := db.saveCandidatePDS(ctx, did, current.PDS); err != nil {
+				return subject, err
+			}
+			client.Host = current.PDS
+			active, err = palustre.RepoActive(ctx, client, did)
 		}
 	}
 	if xrpcCode(err, "RepoNotFound") || xrpcCode(err, "RepoDeactivated") || xrpcCode(err, "RepoTakendown") {
