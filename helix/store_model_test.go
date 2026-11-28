@@ -17,7 +17,7 @@ func FuzzDurableState(f *testing.F) {
 			t.Fatal(err)
 		}
 		ctx := t.Context()
-		return syncmodel.API{Store: db, Close: db.Close,
+		return syncmodel.API{CoalesceScans: true, Store: db, Close: db.Close,
 			Event: func(d, e string, n, ts int64, dirty bool) error {
 				return db.Ingest(ctx, d, followers.Checkpoint{Endpoint: e, Seq: n, TimeUS: ts}, dirty)
 			},

@@ -20,7 +20,8 @@ type Job struct {
 	Attempts   int
 }
 type API struct {
-	Elapse func() error
+	CoalesceScans bool
+	Elapse        func() error
 	Store
 	Event         func(string, string, int64, int64, bool) error
 	Recover       func(string, int64) error
@@ -56,7 +57,7 @@ func Fuzz(f *testing.F, open func(*testing.T, string) API) {
 		var held Job
 		var valid bool
 		changed := func(did string, urgent bool) {
-			if held.DID == did {
+			if held.DID == did && (urgent || !db.CoalesceScans) {
 				valid = false
 			}
 			if _, ok := pending[did]; !ok || urgent {

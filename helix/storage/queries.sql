@@ -29,9 +29,9 @@ SELECT actor FROM targets WHERE list_uri=?;
 -- name: EnqueueEvent :exec
 INSERT INTO pending(did,ready,ready_since) VALUES(?,0,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since);
 -- name: QueueScan :exec
-INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1;
+INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO NOTHING;
 -- name: QueueMembers :exec
-INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1;
+INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO NOTHING;
 -- name: NextJob :one
 SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 1;
 -- name: FinishJob :execrows
@@ -73,7 +73,17 @@ SELECT EXISTS(SELECT did FROM candidates WHERE candidates.did=sqlc.arg(did) UNIO
 INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value;
 
 -- name: NextJobs :many
-SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 8;
+-- Seven slots retain live-event priority. The last serves the oldest ready
+-- account, so sustained event traffic cannot starve backfills or due retries.
+WITH priority AS (
+  SELECT p.did,p.generation,p.attempts FROM pending AS p WHERE p.ready<=sqlc.arg(now) ORDER BY p.ready,p.did LIMIT 7
+), oldest AS (
+  SELECT p.did,p.generation,p.attempts FROM pending AS p
+  WHERE p.ready_since<=sqlc.arg(now) AND p.ready<=sqlc.arg(now) AND p.did NOT IN (SELECT did FROM priority)
+  ORDER BY p.ready_since LIMIT 1
+)
+SELECT did,generation,attempts FROM priority
+UNION ALL SELECT did,generation,attempts FROM oldest;
 -- name: PendingCount :one
 SELECT COUNT(*) FROM pending;
 

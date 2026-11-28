@@ -1,6 +1,7 @@
 package helix
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -98,4 +99,34 @@ func FuzzCompletedAccountWindow(f *testing.F) {
 			t.Fatalf("idle completions=%d", got)
 		}
 	})
+}
+
+// A saturated priority queue must still service its oldest eligible account.
+func TestBatchReservesOldestReadySlot(t *testing.T) {
+	ctx := t.Context()
+	db, err := openStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	_, err = db.conn.Exec(`INSERT INTO pending(did,ready,ready_since) VALUES ('old-scan',1,1),('future-retry',200,200)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 16; i++ {
+		if _, err := db.conn.Exec("INSERT INTO pending(did,ready,ready_since) VALUES (?,0,10)", fmt.Sprint(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := db.queries.NextJobs(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, r := range rows {
+		seen[r.Did] = true
+	}
+	if len(seen) != 8 || !seen["old-scan"] || seen["future-retry"] {
+		t.Fatalf("batch %v", rows)
+	}
 }

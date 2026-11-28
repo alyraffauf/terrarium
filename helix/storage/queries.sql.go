@@ -253,7 +253,15 @@ func (q *Queries) NextJob(ctx context.Context, ready int64) (NextJobRow, error) 
 }
 
 const nextJobs = `-- name: NextJobs :many
-SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 8
+WITH priority AS (
+  SELECT p.did,p.generation,p.attempts FROM pending AS p WHERE p.ready<=?1 ORDER BY p.ready,p.did LIMIT 7
+), oldest AS (
+  SELECT p.did,p.generation,p.attempts FROM pending AS p
+  WHERE p.ready_since<=?1 AND p.ready<=?1 AND p.did NOT IN (SELECT did FROM priority)
+  ORDER BY p.ready_since LIMIT 1
+)
+SELECT did,generation,attempts FROM priority
+UNION ALL SELECT did,generation,attempts FROM oldest
 `
 
 type NextJobsRow struct {
@@ -262,8 +270,10 @@ type NextJobsRow struct {
 	Attempts   int64
 }
 
-func (q *Queries) NextJobs(ctx context.Context, ready int64) ([]NextJobsRow, error) {
-	rows, err := q.db.QueryContext(ctx, nextJobs, ready)
+// Seven slots retain live-event priority. The last serves the oldest ready
+// account, so sustained event traffic cannot starve backfills or due retries.
+func (q *Queries) NextJobs(ctx context.Context, now int64) ([]NextJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, nextJobs, now)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +331,7 @@ func (q *Queries) QueueFollowChanges(ctx context.Context) error {
 }
 
 const queueMembers = `-- name: QueueMembers :exec
-INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1
+INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO NOTHING
 `
 
 func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
@@ -330,7 +340,7 @@ func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
 }
 
 const queueScan = `-- name: QueueScan :exec
-INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1
+INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO NOTHING
 `
 
 func (q *Queries) QueueScan(ctx context.Context, did string) error {
