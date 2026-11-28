@@ -67,6 +67,9 @@ func (items inventory) ForgetMember(_ context.Context, _, key string) error { re
 // one membership decision, never for a whole scan or retry delay.
 type ownerSession struct {
 	inventories ownerInventories
+	readSlots   chan struct{}
+	readHosts   palustre.HostLimiter
+	initSlots   sync.Once
 	*palustre.Session
 	mu sync.Mutex
 }
@@ -128,7 +131,7 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	if appErr != nil {
 		clear(likers)
 	}
-	uncertain, linkErr := scan.backlinks(ctx, api.Session, constellation, likers, now)
+	uncertain, linkErr := scan.backlinks(ctx, api, constellation, likers, now)
 	discoveryErr := errors.Join(appErr, linkErr)
 	items, err := partition.read(ctx, api.reader())
 	if err != nil {
@@ -156,7 +159,7 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	return errors.Join(firstFailure, discoveryErr)
 }
 
-func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endpoint string, likers map[string]bool, now func() time.Time) (map[string]bool, error) {
+func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint string, likers map[string]bool, now func() time.Time) (map[string]bool, error) {
 	nextRetries := map[likeRecordKey]verificationRetry{}
 	const collection = "app.bsky.feed.like"
 	client := &xrpc.Client{Host: endpoint, Client: api.HTTP}
@@ -165,36 +168,70 @@ func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endp
 		if err != nil {
 			return nil, err
 		}
+		byActor := make(map[string][]*palustre.Backlink)
+		seen := make(map[likeRecordKey]bool)
 		for _, row := range rows {
-			if likers[row.Did] {
+			key := likeRecordKey{row.Did, row.Rkey}
+			if likers[row.Did] || seen[key] {
 				continue
 			}
-			key := likeRecordKey{did: row.Did, rkey: row.Rkey}
+			seen[key] = true
 			if _, deferred := nextRetries[key]; deferred {
 				continue
 			}
-			retry := scan.retries[key]
-			if now().Before(retry.due) {
+			if retry := scan.retries[key]; now().Before(retry.due) {
 				nextRetries[key] = retry
 				continue
 			}
-			ok, err := verifyLike(ctx, api, row, scan.post)
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
+			byActor[row.Did] = append(byActor[row.Did], row)
+		}
+		type result struct {
+			key   likeRecordKey
+			liked bool
+			err   error
+		}
+		results := make(chan result, len(rows))
+		api.initSlots.Do(func() { api.readSlots = make(chan struct{}, 4) })
+		var workers sync.WaitGroup
+		for _, records := range byActor {
+			select {
+			case api.readSlots <- struct{}{}:
+			case <-ctx.Done():
+				workers.Wait()
+				return nil, ctx.Err()
+			}
+			workers.Go(func() {
+				defer func() { <-api.readSlots }()
+				for _, row := range records {
+					ok, err := verifyLike(ctx, api, row, scan.post)
+					results <- result{likeRecordKey{row.Did, row.Rkey}, ok, err}
+					if ok || ctx.Err() != nil {
+						break
+					}
 				}
+			})
+		}
+		workers.Wait()
+		close(results)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		for verified := range results {
+			key := verified.key
+			retry := scan.retries[key]
+			if verified.err != nil {
 				api.VerificationDeferred.Add(1)
 				delay := palustre.VerificationRetryDelay(retry.failures)
 				nextRetries[key] = verificationRetry{failures: retry.failures + 1, due: now().Add(delay)}
-				slog.Warn("like verification deferred", "post", scan.post, "did", row.Did, "rkey", row.Rkey, "retry_in", delay, "error", err)
+				slog.Warn("like verification deferred", "post", scan.post, "did", key.did, "rkey", key.rkey, "retry_in", delay, "error", verified.err)
 				continue
 			}
 			if retry.failures > 0 {
 				api.VerificationRecovered.Add(1)
 			}
 			delete(scan.retries, key)
-			if ok {
-				likers[row.Did] = true
+			if verified.liked {
+				likers[key.did] = true
 			}
 		}
 		return next, nil
@@ -215,11 +252,16 @@ func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endp
 	return uncertain, pageErr
 }
 
-func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backlink, post string) (bool, error) {
+func verifyLike(ctx context.Context, api *ownerSession, row *palustre.Backlink, post string) (bool, error) {
 	doc, cached, err := api.CachedDID(ctx, row.Did)
 	if err != nil {
 		return false, err
 	}
+	release, err := api.readHosts.Acquire(ctx, doc.PDS)
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	client := &xrpc.Client{Host: doc.PDS, Client: api.HTTP}
 	reader := api.PDSVerificationClient(client)
 	record, err := atproto.RepoGetRecord(ctx, reader, "", row.Collection, row.Did, row.Rkey)

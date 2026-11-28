@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ type remoteItem struct {
 	Subject string `json:"subject"`
 }
 type testRepository struct {
+	readsMu             sync.Mutex
 	postScan            postScan
 	unavailable         map[string]bool
 	verificationReads   map[string]int
@@ -135,7 +137,9 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 		if req.URL.Host == "actor.test" && q.Get("collection") == "app.bsky.feed.like" {
 			did := q.Get("repo")
 			if repo.verificationReads != nil {
+				repo.readsMu.Lock()
 				repo.verificationReads[did]++
+				repo.readsMu.Unlock()
 			}
 			if repo.unavailable[did] {
 				return wire(400, map[string]string{"error": "InvalidRequest", "message": "Could not find repo: " + did})
