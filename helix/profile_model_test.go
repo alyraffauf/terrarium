@@ -31,24 +31,16 @@ func FuzzProfileChanges(f *testing.F) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if target.suspended.Load() != w.Suspended {
+			if target.suspended.Load() {
 				t.Fatal("wrong suspension status")
 			}
 			record := w.Record("list0")
-			if !w.Suspended {
-				description = "Followers of " + w.Handle
-				if title == "" {
-					title, _ = record["name"].(string)
-					if title == "" {
-						t.Fatal("missing title")
-					}
-				}
-			}
+			description = "Followers of " + w.Handle
 			if title == "" {
-				if record != nil {
-					t.Fatal("suspended actor created list")
+				title, _ = record["name"].(string)
+				if title == "" {
+					t.Fatal("missing title")
 				}
-				continue
 			}
 			if record["name"] != title || record["description"] != description {
 				t.Fatalf("profile %d list %v want %q %q", i, record, title, description)

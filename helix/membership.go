@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync/atomic"
 	"time"
@@ -34,36 +33,21 @@ type listTarget struct {
 var recordKey = palustre.RecordKey
 
 func (api *listTarget) ensureList(ctx context.Context) error {
-	client := &xrpc.Client{Host: api.cfg.AppView, Client: api.HTTP}
-	profile, err := bsky.ActorGetProfile(ctx, client, api.actor)
-	if err != nil {
-		if palustre.XRPCCode(err, "AccountTakedown") || palustre.XRPCCode(err, "AccountDeactivated") {
-			if !api.suspended.Swap(true) {
-				slog.Warn("target unavailable; pausing list updates", "account", api.actor, "error", err)
-			}
-			return nil
-		}
-		return err
-	}
-	if profile.Did != api.actor {
-		return fmt.Errorf("profile returned a different target DID")
-	}
-	doc, err := api.Resolve(ctx, api.actor)
-	if err != nil {
-		return err
-	}
-	if doc.Handle == "" {
-		return fmt.Errorf("target has no valid handle")
-	}
-	name := listName(doc.Handle)
-	legacy := name
-	if len(legacy) > 64 {
-		legacy = legacy[:61] + "..."
-	}
 	key := "list-name:" + api.listURI
 	previous, err := api.db.queries.GetBinding(ctx, key)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	name := previous
+	if name == "" {
+		name = listName(api.actor)
+	}
+	if doc, err := api.Resolve(ctx, api.actor); err == nil && doc.Handle != "" {
+		name = listName(doc.Handle)
+	}
+	legacy := name
+	if len(legacy) > 64 {
+		legacy = legacy[:61] + "..."
 	}
 	if err := api.EnsureList(ctx, api.listURI, name, previous, legacy, listName(api.actor)); err != nil {
 		return err
@@ -76,7 +60,9 @@ func (api *listTarget) ensureList(ctx context.Context) error {
 		return err
 	}
 	api.avatar = ""
-	if profile.Avatar != nil {
+	client := &xrpc.Client{Host: api.cfg.AppView, Client: api.HTTP}
+	profile, err := bsky.ActorGetProfile(ctx, client, api.actor)
+	if err == nil && profile != nil && profile.Did == api.actor && profile.Avatar != nil {
 		api.avatar = *profile.Avatar
 	}
 	api.suspended.Store(false)
