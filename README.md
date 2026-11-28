@@ -31,6 +31,12 @@ nix run .#helix -- first.example.com second.example.com
 
 Helix prints the list URIs at startup. Keep its SQLite file when you restart. Capensis and Trifolium also use SQLite. Cordata uses the owner’s repository for persistence. Each daemon guide above includes its Helm configuration. Container images are published at `ghcr.io/alyraffauf/terrarium/<daemon>` with `latest` and `sha-<commit>` tags.
 
+## Kubernetes health checks
+
+Each Helm chart runs one replica and uses the Recreate strategy so only one process writes list records. Pods request 25m CPU and 64Mi memory and have limits of one CPU and 512Mi memory. Override these in the chart’s `resources` value.
+
+The kubelet probes the pod on `health.port` (8081 by default), independently of the Prometheus listener. The startup probe allows up to five minutes for `/livez` to respond. After startup, three consecutive failed liveness checks ten seconds apart trigger a restart. The readiness probe checks `/readyz` every five seconds while the daemon initializes and throughout its lifetime. Liveness tracks local worker progress, including remote requests that fail and enter backoff.
+
 ## Measure verification cost
 
 All four daemons can serve Prometheus metrics at `/metrics`. Set `--metrics-address=:9090` and configure your scraper. The examples assume a scrape target label named `daemon`.

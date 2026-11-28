@@ -19,10 +19,19 @@ import (
 )
 
 type port struct {
+	Name          string
 	Port          int
 	ContainerPort int `yaml:"containerPort"`
 }
+type probe struct {
+	HTTPGet struct{ Path, Port string } `yaml:"httpGet"`
+}
 type container struct {
+	Startup   probe `yaml:"startupProbe"`
+	Liveness  probe `yaml:"livenessProbe"`
+	Readiness probe `yaml:"readinessProbe"`
+	Resources struct{ Requests, Limits map[string]string }
+
 	Args  []string
 	Ports []port
 }
@@ -31,6 +40,7 @@ type manifest struct {
 	Metadata struct{ Name string }
 	Spec     struct {
 		Ports    []port
+		Strategy struct{ Type string }
 		Selector map[string]any
 		Template struct {
 			Metadata struct {
@@ -111,7 +121,19 @@ func TestRenderedDaemonArguments(t *testing.T) {
 					t.Fatal("expected one daemon")
 				}
 				args := deploy.Spec.Template.Spec.Containers[0].Args
-				for _, want := range append(slices.Clone(app.args), "--identifier=123") {
+				c := deploy.Spec.Template.Spec.Containers[0]
+				if !slices.Contains(c.Ports, port{Name: "health", ContainerPort: 8081}) || c.Startup.HTTPGet.Path != "/livez" || c.Liveness.HTTPGet.Path != "/livez" || c.Readiness.HTTPGet.Path != "/readyz" {
+					t.Fatal("missing health listener or probe")
+				}
+				for _, p := range []probe{c.Startup, c.Liveness, c.Readiness} {
+					if p.HTTPGet.Port != "health" {
+						t.Fatal("probe does not use the health port")
+					}
+				}
+				if deploy.Spec.Strategy.Type != "Recreate" || c.Resources.Requests["cpu"] != "25m" || c.Resources.Requests["memory"] != "64Mi" || c.Resources.Limits["cpu"] != "1" || c.Resources.Limits["memory"] != "512Mi" {
+					t.Fatal("unexpected rollout strategy or resource defaults")
+				}
+				for _, want := range append(slices.Clone(app.args), "--identifier=123", "--health-address=:8081") {
 					if !slices.Contains(args, want) {
 						t.Fatalf("missing %q in %v", want, args)
 					}
@@ -136,15 +158,21 @@ func TestRenderedDaemonArguments(t *testing.T) {
 
 func TestMetricsPortsAgree(t *testing.T) {
 	for _, app := range []string{"helix", "capensis", "cordata", "trifolium"} {
-		for _, n := range []int{9090, 18128} {
+		for _, n := range []int{8081, 9090, 18128} {
 			values := map[string]any{"identifier": "owner.example", "existingSecret": "secret", "post": "at://did:example:a/app.bsky.feed.post/key", "pds": []string{"a.example"}, "accounts": []string{"a.example"}, "metrics": map[string]any{"enabled": true, "port": n}}
 			docs, err := render(t, app, values)
+			if n == 8081 {
+				if err == nil || !strings.Contains(err.Error(), "health.port and metrics.port must differ") {
+					t.Fatalf("%s accepted or misreported a listener port collision: %v", app, err)
+				}
+				continue
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
 			pod := docs["Deployment"].Spec.Template
 			c := pod.Spec.Containers[0]
-			if !slices.Contains(c.Args, "--metrics-address=:"+strconv.Itoa(n)) || len(c.Ports) != 1 || c.Ports[0].ContainerPort != n || pod.Metadata.Annotations["prometheus.io/port"] != strconv.Itoa(n) {
+			if !slices.Contains(c.Args, "--metrics-address=:"+strconv.Itoa(n)) || !slices.Contains(c.Ports, port{Name: "metrics", ContainerPort: n}) || pod.Metadata.Annotations["prometheus.io/port"] != strconv.Itoa(n) {
 				t.Fatalf("%s pod metrics mismatch for %d", app, n)
 			}
 			service := docs["Service"]
