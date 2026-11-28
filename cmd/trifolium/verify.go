@@ -9,9 +9,6 @@ import (
 
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/bluesky-social/indigo/api/atproto"
-	"github.com/bluesky-social/indigo/api/bsky"
-	"github.com/bluesky-social/indigo/atproto/syntax"
-	lex "github.com/bluesky-social/indigo/lex/util"
 	"github.com/bluesky-social/indigo/xrpc"
 )
 
@@ -123,27 +120,6 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 	return nil
 }
 
-func parseFollow(did, rawURI string, value *lex.LexiconTypeDecoder) (key, subject string, err error) {
-	uri, err := syntax.ParseATURI(rawURI)
-	if err != nil {
-		return "", "", err
-	}
-	if uri.Authority().String() != did || uri.Collection().String() != followCollection || uri.RecordKey() == "" {
-		return "", "", fmt.Errorf("unexpected follow record URI %q", rawURI)
-	}
-	if value == nil {
-		return "", "", fmt.Errorf("missing follow record value for %s", uri)
-	}
-	record, ok := value.Val.(*bsky.GraphFollow)
-	if !ok || record == nil || record.LexiconTypeID != followCollection {
-		return "", "", fmt.Errorf("unexpected follow record type for %s", uri)
-	}
-	if _, err := syntax.ParseDID(record.Subject); err != nil {
-		return "", "", fmt.Errorf("invalid follow subject for %s: %w", uri, err)
-	}
-	return uri.RecordKey().String(), record.Subject, nil
-}
-
 func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) error {
 	reader := a.api.PDSVerificationClient(c)
 	record, err := atproto.RepoGetRecord(ctx, reader, "", followCollection, j.did, j.key)
@@ -159,7 +135,7 @@ func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) er
 	}
 	var matches bool
 	if err == nil {
-		key, subject, err := parseFollow(j.did, record.Uri, record.Value)
+		key, subject, err := palustre.ParseFollowRecord(j.did, record.Uri, record.Value)
 		if err != nil {
 			return err
 		}

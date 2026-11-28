@@ -34,6 +34,8 @@ type Pending struct {
 	Attempts   int64
 	Ready      int64
 	ReadySince int64
+	HintTarget string
+	HintRkey   string
 }
 
 type SyncState struct {

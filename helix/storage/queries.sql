@@ -27,11 +27,11 @@ INSERT INTO targets(actor,list_uri) VALUES(?,?) ON CONFLICT(actor) DO NOTHING;
 -- name: GetListTarget :one
 SELECT actor FROM targets WHERE list_uri=?;
 -- name: EnqueueEvent :exec
-INSERT INTO pending(did,ready,ready_since) VALUES(?,0,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since);
+INSERT INTO pending(did,ready,ready_since) VALUES(?,0,unixepoch()) ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since);
 -- name: QueueScan :exec
-INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO NOTHING;
+INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1 WHERE pending.hint_target<>'';
 -- name: QueueMembers :exec
-INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO NOTHING;
+INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1 WHERE pending.hint_target<>'';
 -- name: NextJob :one
 SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 1;
 -- name: FinishJob :execrows
@@ -54,7 +54,7 @@ INSERT INTO new_follows(did) VALUES(?);
 INSERT INTO pending(did,ready_since)
 SELECT did,unixepoch() FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)
 UNION SELECT did,unixepoch() FROM (SELECT did FROM new_follows EXCEPT SELECT did FROM follows) WHERE true
-ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since);
+ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since);
 -- name: ClearFollows :exec
 DELETE FROM follows;
 -- name: ReplaceFollows :exec
@@ -90,6 +90,19 @@ SELECT COUNT(*) FROM pending;
 -- name: OldestReadyAgeSeconds :one
 SELECT CAST(COALESCE(unixepoch()-MIN(ready_since),0) AS INTEGER)
 FROM pending WHERE ready_since<=unixepoch();
+
+-- name: QueueDiscoveredFollow :exec
+-- A second target requires a full inventory. Preserve full work and retry deadlines.
+INSERT INTO pending(did,ready,ready_since,hint_target,hint_rkey)
+VALUES(?,unixepoch(),unixepoch(),?,?)
+ON CONFLICT(did) DO UPDATE SET
+  hint_target=CASE WHEN pending.hint_target=excluded.hint_target THEN excluded.hint_target ELSE '' END,
+  hint_rkey=CASE WHEN pending.hint_target=excluded.hint_target THEN excluded.hint_rkey ELSE '' END,
+  generation=generation+1
+WHERE pending.hint_target<>'' AND (pending.hint_target<>excluded.hint_target OR (pending.hint_rkey='' AND excluded.hint_rkey<>''));
+
+-- name: FollowHint :one
+SELECT hint_target, hint_rkey FROM pending WHERE did=?;
 
 -- name: CurrentJob :one
 SELECT EXISTS(SELECT 1 FROM pending WHERE did=? AND generation=?);

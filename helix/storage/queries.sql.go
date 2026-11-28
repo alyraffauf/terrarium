@@ -96,7 +96,7 @@ func (q *Queries) DirtyFollows(ctx context.Context) error {
 }
 
 const enqueueEvent = `-- name: EnqueueEvent :exec
-INSERT INTO pending(did,ready,ready_since) VALUES(?,0,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since)
+INSERT INTO pending(did,ready,ready_since) VALUES(?,0,unixepoch()) ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since)
 `
 
 func (q *Queries) EnqueueEvent(ctx context.Context, did string) error {
@@ -119,6 +119,22 @@ func (q *Queries) FinishJob(ctx context.Context, arg FinishJobParams) (int64, er
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const followHint = `-- name: FollowHint :one
+SELECT hint_target, hint_rkey FROM pending WHERE did=?
+`
+
+type FollowHintRow struct {
+	HintTarget string
+	HintRkey   string
+}
+
+func (q *Queries) FollowHint(ctx context.Context, did string) (FollowHintRow, error) {
+	row := q.db.QueryRowContext(ctx, followHint, did)
+	var i FollowHintRow
+	err := row.Scan(&i.HintTarget, &i.HintRkey)
+	return i, err
 }
 
 const forgetMember = `-- name: ForgetMember :exec
@@ -346,11 +362,33 @@ func (q *Queries) PendingCount(ctx context.Context) (int64, error) {
 	return count, err
 }
 
+const queueDiscoveredFollow = `-- name: QueueDiscoveredFollow :exec
+INSERT INTO pending(did,ready,ready_since,hint_target,hint_rkey)
+VALUES(?,unixepoch(),unixepoch(),?,?)
+ON CONFLICT(did) DO UPDATE SET
+  hint_target=CASE WHEN pending.hint_target=excluded.hint_target THEN excluded.hint_target ELSE '' END,
+  hint_rkey=CASE WHEN pending.hint_target=excluded.hint_target THEN excluded.hint_rkey ELSE '' END,
+  generation=generation+1
+WHERE pending.hint_target<>'' AND (pending.hint_target<>excluded.hint_target OR (pending.hint_rkey='' AND excluded.hint_rkey<>''))
+`
+
+type QueueDiscoveredFollowParams struct {
+	Did        string
+	HintTarget string
+	HintRkey   string
+}
+
+// A second target requires a full inventory. Preserve full work and retry deadlines.
+func (q *Queries) QueueDiscoveredFollow(ctx context.Context, arg QueueDiscoveredFollowParams) error {
+	_, err := q.db.ExecContext(ctx, queueDiscoveredFollow, arg.Did, arg.HintTarget, arg.HintRkey)
+	return err
+}
+
 const queueFollowChanges = `-- name: QueueFollowChanges :exec
 INSERT INTO pending(did,ready_since)
 SELECT did,unixepoch() FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)
 UNION SELECT did,unixepoch() FROM (SELECT did FROM new_follows EXCEPT SELECT did FROM follows) WHERE true
-ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since)
+ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since)
 `
 
 func (q *Queries) QueueFollowChanges(ctx context.Context) error {
@@ -359,7 +397,7 @@ func (q *Queries) QueueFollowChanges(ctx context.Context) error {
 }
 
 const queueMembers = `-- name: QueueMembers :exec
-INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO NOTHING
+INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1 WHERE pending.hint_target<>''
 `
 
 func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
@@ -368,7 +406,7 @@ func (q *Queries) QueueMembers(ctx context.Context, actor string) error {
 }
 
 const queueScan = `-- name: QueueScan :exec
-INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO NOTHING
+INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO UPDATE SET hint_target='',hint_rkey='',generation=generation+1 WHERE pending.hint_target<>''
 `
 
 func (q *Queries) QueueScan(ctx context.Context, did string) error {

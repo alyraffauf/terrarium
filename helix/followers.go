@@ -2,7 +2,11 @@ package helix
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
+	"github.com/alyraffauf/terrarium/helix/storage"
+	"github.com/bluesky-social/indigo/api/atproto"
 
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
@@ -29,7 +33,7 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 		if page.Followers == nil {
 			return fmt.Errorf("follower response has no followers array")
 		}
-		dids := make([]string, 0, len(page.Followers))
+		rows := make([]storage.QueueDiscoveredFollowParams, 0, len(page.Followers))
 		for _, follower := range page.Followers {
 			if follower == nil {
 				return fmt.Errorf("follower response includes a null profile")
@@ -37,9 +41,9 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 			if _, err := syntax.ParseDID(follower.Did); err != nil {
 				return err
 			}
-			dids = append(dids, follower.Did)
+			rows = append(rows, storage.QueueDiscoveredFollowParams{Did: follower.Did, HintTarget: api.actor})
 		}
-		if err := db.queueScan(ctx, dids...); err != nil {
+		if err := db.queueDiscoveredFollows(ctx, rows); err != nil {
 			return err
 		}
 		if page.Cursor == nil || *page.Cursor == "" {
@@ -59,7 +63,7 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 	if err != nil {
 		return subject, err
 	}
-	subject.excluded = followed || did == api.Client.Auth.Did
+	subject.excluded = followed || did == api.ownerDID
 	if subject.excluded {
 		return subject, nil
 	}
@@ -73,6 +77,15 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 	} else if err := db.saveCandidatePDS(ctx, did, host); err != nil {
 		return subject, err
 	}
+	release, err := api.readHosts.Acquire(ctx, host)
+	if err != nil {
+		return subject, err
+	}
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	client := &xrpc.Client{Host: host, Client: api.HTTP}
 	reader := api.PDSVerificationClient(client)
 	active, err := palustre.RepoActive(ctx, reader, did)
@@ -83,6 +96,11 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 		}
 		if current.PDS != host {
 			if err := db.saveCandidatePDS(ctx, did, current.PDS); err != nil {
+				return subject, err
+			}
+			release()
+			release, err = api.readHosts.Acquire(ctx, current.PDS)
+			if err != nil {
 				return subject, err
 			}
 			client.Host = current.PDS
@@ -105,6 +123,29 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 	for _, target := range targets {
 		watched[target] = true
 	}
+	hint, err := db.queries.FollowHint(ctx, did)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return subject, err
+	}
+	if watched[hint.HintTarget] && hint.HintRkey != "" {
+		record, readErr := atproto.RepoGetRecord(ctx, reader, "", palustre.FollowCollection, did, hint.HintRkey)
+		if cached && palustre.MayHaveMoved(readErr) {
+			if err := api.ConfirmPDS(ctx, did, client.Host); err != nil {
+				return subject, err
+			}
+		}
+		if readErr == nil && record != nil {
+			key, target, parseErr := palustre.ParseFollowRecord(did, record.Uri, record.Value)
+			if parseErr == nil && key == hint.HintRkey && target == hint.HintTarget {
+				subject.onlyTarget = target
+				subject.follows = map[string]bool{target: true}
+				return subject, nil
+			}
+		} else if readErr != nil && !palustre.MayHaveMoved(readErr) {
+			return subject, readErr
+		}
+		// A stale or missing key cannot rule out a second follow to the same target.
+	}
 	subject.follows, err = palustre.FetchTargetFollows(ctx, reader, did, watched)
 	if err == nil {
 		api.FollowInventoriesCompleted.Add(1)
@@ -119,10 +160,24 @@ func (api *listTarget) backfillLinks(ctx context.Context, db *store) error {
 		if err != nil {
 			return nil, err
 		}
-		dids := make([]string, 0, len(rows))
+		hints := make([]storage.QueueDiscoveredFollowParams, 0, len(rows))
 		for _, r := range rows {
-			dids = append(dids, r.Did)
+			hints = append(hints, storage.QueueDiscoveredFollowParams{Did: r.Did, HintTarget: api.actor, HintRkey: r.Rkey})
 		}
-		return next, db.queueScan(ctx, dids...)
+		return next, db.queueDiscoveredFollows(ctx, hints)
+	})
+}
+
+func (db *store) queueDiscoveredFollows(ctx context.Context, rows []storage.QueueDiscoveredFollowParams) error {
+	return db.transaction(ctx, func(q *storage.Queries) error {
+		for _, row := range rows {
+			if err := q.RememberCandidate(ctx, row.Did); err != nil {
+				return err
+			}
+			if err := q.QueueDiscoveredFollow(ctx, row); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }

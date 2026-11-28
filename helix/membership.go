@@ -85,6 +85,7 @@ func (api *listTarget) refreshListIcon(ctx context.Context) {
 }
 
 type subjectState struct {
+	onlyTarget  string // A verified backlink supplies positive evidence for this target alone.
 	did         string
 	excluded    bool
 	beforeWrite func(context.Context) error
@@ -92,7 +93,7 @@ type subjectState struct {
 }
 
 func (api *listTarget) reconcileSubject(ctx context.Context, subject subjectState, db *store) error {
-	if api.suspended.Load() {
+	if api.suspended.Load() || (!subject.excluded && subject.onlyTarget != "" && subject.onlyTarget != api.actor) {
 		return nil
 	}
 	belongs := !subject.excluded && subject.follows[api.actor]

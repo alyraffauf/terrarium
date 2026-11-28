@@ -51,7 +51,7 @@ func FuzzTypedUpgrade(f *testing.F) {
 			}
 			var keepPriority, keepBackfill, keepDelay bool
 			err = db.conn.QueryRow(`SELECT
-				EXISTS(SELECT 1 FROM pending WHERE did='priority' AND ready=0 AND ready_since BETWEEN ? AND unixepoch()),
+				EXISTS(SELECT 1 FROM pending WHERE did='priority' AND ready=0 AND hint_target='' AND hint_rkey='' AND ready_since BETWEEN ? AND unixepoch()),
 				EXISTS(SELECT 1 FROM pending WHERE did='backfill' AND ready_since=ready AND ready=1700000000),
 				EXISTS(SELECT 1 FROM pending WHERE did='delayed' AND ready_since=ready AND ready=253402300799)`, upgradedAfter).Scan(&keepPriority, &keepBackfill, &keepDelay)
 			if err != nil || !keepPriority || !keepBackfill || !keepDelay {

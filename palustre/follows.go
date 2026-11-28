@@ -102,3 +102,25 @@ func ListFollowPage(ctx context.Context, client lexutil.LexClient, did, cursor s
 	}
 	return *page.Cursor, nil
 }
+
+// ParseFollowRecord validates an individual follow returned by a candidate PDS.
+func ParseFollowRecord(did, rawURI string, value *lexutil.LexiconTypeDecoder) (key, subject string, err error) {
+	uri, err := syntax.ParseATURI(rawURI)
+	if err != nil {
+		return "", "", err
+	}
+	if uri.Authority().String() != did || uri.Collection().String() != FollowCollection || uri.RecordKey() == "" {
+		return "", "", fmt.Errorf("unexpected follow record URI %q", rawURI)
+	}
+	if value == nil {
+		return "", "", fmt.Errorf("missing follow record value for %s", uri)
+	}
+	record, ok := value.Val.(*bsky.GraphFollow)
+	if !ok || record == nil || record.LexiconTypeID != FollowCollection {
+		return "", "", fmt.Errorf("unexpected follow record type for %s", uri)
+	}
+	if _, err := syntax.ParseDID(record.Subject); err != nil {
+		return "", "", fmt.Errorf("invalid follow subject for %s: %w", uri, err)
+	}
+	return uri.RecordKey().String(), record.Subject, nil
+}
