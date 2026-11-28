@@ -12,7 +12,7 @@ import (
 )
 
 type Config struct {
-	MetricsAddress                                                                         string
+	MetricsAddress, HealthAddress                                                          string
 	Constellation, AppView, Identifier, Password, LoginPDS, Slingshot, Jetstream, Database string
 	Targets                                                                                []Target
 	WriteInterval                                                                          time.Duration

@@ -57,12 +57,13 @@ func command() *cobra.Command {
 				Targets:       targets, Identifier: config.GetString("identifier"),
 				Password: config.GetString("app-password"), LoginPDS: config.GetString("login-pds"),
 				Slingshot: config.GetString("slingshot"), Jetstream: config.GetString("jetstream"),
-				MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: intervals.Rescan,
+				HealthAddress: config.GetString("health-address"), MetricsAddress: config.GetString("metrics-address"), Database: config.GetString("database"), RescanInterval: intervals.Rescan,
 			}
 			return capensis.Run(cmd.Context(), cfg)
 		},
 	}
 	flags := cmd.Flags()
+	flags.String("health-address", "", "HTTP listen address for /readyz and /livez (disabled by default)")
 	flags.String("metrics-address", "", "Prometheus listen address, such as :9090 (disabled by default)")
 	flags.StringSlice("pds", nil, "Target PDS hostnames or URLs (repeatable or comma-separated)")
 	flags.StringSlice("list", nil, "Bind PDS=at://DID/app.bsky.graph.list/record-key (repeatable or comma-separated)")

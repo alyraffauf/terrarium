@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
-	"net/http"
 	"net/url"
 	"slices"
 	"strings"
@@ -288,9 +287,9 @@ func verifyLike(ctx context.Context, api *ownerSession, row *palustre.Backlink, 
 
 type Config struct {
 	palustre.Config
-	AppView, Post, Constellation, MetricsAddress string
-	Posts                                        []string
-	RescanInterval                               time.Duration
+	AppView, Post, Constellation, MetricsAddress, HealthAddress string
+	Posts                                                       []string
+	RescanInterval                                              time.Duration
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -328,7 +327,13 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 	}
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	health, err := palustre.StartHealth(cfg.HealthAddress)
+	if err != nil {
+		return fmt.Errorf("start health listener: %w", err)
+	}
+	defer health.Close()
+	ctx = health.StartupContext(ctx)
+	httpClient := health.HTTPClient()
 	view := &xrpc.Client{Host: cfg.AppView, Client: httpClient}
 	api := &palustre.Session{Config: cfg.Config, HTTP: httpClient}
 	stopMetrics, err := api.StartMetrics(cfg.MetricsAddress, nil)
@@ -346,6 +351,7 @@ func Run(ctx context.Context, cfg Config) error {
 	for _, uri := range uris {
 		workers.Go(func() { maintainPost(ctx, owner, view, cfg, ownerDID, uri, &claimed) })
 	}
+	health.Ready()
 	workers.Wait()
 	return nil
 }

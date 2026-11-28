@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -115,12 +115,19 @@ func run(ctx context.Context) error {
 	constellation := flag.String("constellation", palustre.DefaultConstellation, "backlink index URL")
 	slingshot := flag.String("slingshot", "https://slingshot.aly.town", "identity resolver")
 	pace := flag.Duration("write-interval", palustre.DefaultFollowerWriteInterval, "minimum interval between list writes")
+	healthAddress := flag.String("health-address", "", "HTTP listen address for /readyz and /livez (disabled by default)")
 	metrics := flag.String("metrics-address", "", "Prometheus listen address, such as :9090 (disabled by default)")
 	flag.Parse()
 	password := os.Getenv("TRIFOLIUM_APP_PASSWORD")
 	if *threshold < 1 || *interval <= 0 || *pace <= 0 || *identifier == "" || password == "" {
 		return errors.New("set identifier and TRIFOLIUM_APP_PASSWORD and use positive threshold and intervals")
 	}
+	health, err := palustre.StartHealth(*healthAddress)
+	if err != nil {
+		return fmt.Errorf("start health listener: %w", err)
+	}
+	defer health.Close()
+	ctx = health.StartupContext(ctx)
 	stream, err := palustre.NormalizeJetstream(*endpoint)
 	if err != nil {
 		return err
@@ -133,7 +140,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := health.HTTPClient()
 	api := &palustre.Session{HTTP: client, Config: palustre.Config{Identifier: *identifier, Password: password, Slingshot: resolver, WriteInterval: *pace}}
 	configs, err := parseClusters(*rawClusters, *accounts, *threshold)
 	if err != nil {
@@ -212,6 +219,7 @@ func run(ctx context.Context) error {
 			}
 		}
 	})
+	health.Ready()
 	wg.Wait()
 	return nil
 }

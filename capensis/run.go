@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
 
@@ -22,6 +21,12 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
+	health, err := palustre.StartHealth(cfg.HealthAddress)
+	if err != nil {
+		return fmt.Errorf("start health listener: %w", err)
+	}
+	defer health.Close()
+	ctx = health.StartupContext(ctx)
 	lock := flock.New(cfg.Database + ".lock")
 	locked, err := lock.TryLock()
 	if err != nil {
@@ -36,7 +41,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		return err
 	}
 	defer db.Close()
-	api := newSession(cfg, &http.Client{Timeout: 30 * time.Second}, nil)
+	api := newSession(cfg, health.HTTPClient(), nil)
 	closeMetrics, err := api.StartMetrics(cfg.MetricsAddress, db.queries.PendingCount)
 	if err != nil {
 		return fmt.Errorf("start metrics: %w", err)
@@ -91,6 +96,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	defer pool.Close()
 	owner := api.Client.Auth.Did
 	nextFollows := time.Time{}
+	health.Ready()
 	for ctx.Err() == nil {
 		requested, err := db.takeRescan(ctx)
 		if err != nil {

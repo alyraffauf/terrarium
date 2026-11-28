@@ -13,7 +13,7 @@ import (
 )
 
 type Config struct {
-	MetricsAddress                                                      string
+	MetricsAddress, HealthAddress                                       string
 	PDS, Identifier, Password, LoginPDS, Slingshot, Jetstream, Database string
 	Targets                                                             []Target
 	WriteInterval                                                       time.Duration

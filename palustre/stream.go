@@ -83,6 +83,7 @@ func Stream(ctx context.Context, endpoint string, cursor int64, handle func([]by
 	}
 }
 func Pause(ctx context.Context, duration time.Duration) bool {
+	healthDelay(ctx, duration)
 	timer := time.NewTimer(duration)
 	defer timer.Stop()
 	select {

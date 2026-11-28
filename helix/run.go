@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +20,12 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	if err := cfg.validate(); err != nil {
 		return err
 	}
+	health, err := palustre.StartHealth(cfg.HealthAddress)
+	if err != nil {
+		return fmt.Errorf("start health listener: %w", err)
+	}
+	defer health.Close()
+	ctx = health.StartupContext(ctx)
 	lock := flock.New(cfg.Database + ".lock")
 	locked, err := lock.TryLock()
 	if err != nil {
@@ -35,7 +40,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		return err
 	}
 	defer db.Close()
-	api := newSession(cfg, &http.Client{Timeout: 30 * time.Second}, nil)
+	api := newSession(cfg, health.HTTPClient(), nil)
 	closeMetrics, err := api.StartMetrics(cfg.MetricsAddress, db.queries.PendingCount,
 		palustre.QueueGauge{Name: "terrarium_oldest_ready_job_age_seconds", Help: "Seconds the oldest eligible pending job has been ready, or zero if none are ready.", Read: db.queries.OldestReadyAgeSeconds},
 		palustre.QueueGauge{Name: "terrarium_unique_accounts_completed_last_minute", Help: "Distinct accounts whose current Helix queue generation finished in the last 60 seconds.", Read: func(context.Context) (int64, error) { return db.completions.count(time.Now()), nil }},
@@ -97,6 +102,7 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	var nextInventory time.Time
 	reads := readQueue{ReadPool: followers.NewReadPool[checked](ctx, readConcurrency)}
 	defer reads.Close()
+	health.Ready()
 	for ctx.Err() == nil {
 		requested, err := db.takeRescan(ctx)
 		if err != nil {
