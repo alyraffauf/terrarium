@@ -25,6 +25,7 @@ type MiniDoc struct {
 
 // session owns authentication and the write limiter shared by every list.
 type Session struct {
+	identities          identityCache
 	Config              Config
 	HTTP                *http.Client
 	Client              *xrpc.Client
@@ -187,7 +188,7 @@ func (api *Session) deferAuthentication(ctx context.Context, login bool, serverR
 	if ctx.Err() != nil {
 		return err
 	}
-	delay := max(time.Minute, min(30*time.Minute, 2*api.retryAuthentication.delay))
+	delay := (backoff{time.Minute, 30 * time.Minute}).next(api.retryAuthentication.delay)
 	after := time.Now().Add(delay)
 	if serverRetryAfter.After(after) {
 		after = serverRetryAfter
