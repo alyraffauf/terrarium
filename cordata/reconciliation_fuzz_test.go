@@ -163,7 +163,7 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 func (repo *testRepository) scan(ctx context.Context) error {
 	client := &xrpc.Client{Host: "https://repo.test", Client: &http.Client{Transport: repo}, Auth: &xrpc.AuthInfo{Did: owner}}
 	api := &palustre.Session{HTTP: client.Client, Client: client, Refreshed: time.Now(), Config: palustre.Config{WriteInterval: time.Nanosecond}}
-	return syncPost(ctx, api, client, client.Host, post, list)
+	return syncPost(ctx, &ownerSession{Session: api}, client, client.Host, post, list)
 }
 
 func FuzzLikerMembership(f *testing.F) {

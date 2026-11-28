@@ -4,6 +4,7 @@ image:
   pullPolicy: Always
 identifier: ""
 post: ""
+posts: []
 existingSecret: ""
 passwordKey: app-password
 appview: https://public.api.bsky.app

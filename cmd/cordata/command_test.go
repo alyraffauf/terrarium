@@ -24,10 +24,16 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer cancel()
 			created := make(chan string, 1)
+			failedLookup := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case "/xrpc/blue.microcosm.identity.resolveMiniDoc":
+					if r.URL.Query().Get("identifier") == "missing.example" {
+						close(failedLookup)
+						http.Error(w, `{"error":"NotFound"}`, 404)
+						return
+					}
 					fmt.Fprintf(w, `{"did":%q,"handle":"author.example","pds":"https://author.example"}`, author)
 				case "/xrpc/com.atproto.server.createSession":
 					fmt.Fprintf(w, `{"did":%q,"handle":"owner.example","accessJwt":"access","refreshJwt":"refresh"}`, owner)
@@ -64,6 +70,11 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 						if in.Record.Subject != liker {
 							t.Error("wrong liker")
 						}
+						select {
+						case <-failedLookup:
+						case <-ctx.Done():
+							t.Error("unavailable post was never attempted")
+						}
 						created <- in.Record.List
 						cancel()
 					default:
@@ -80,7 +91,7 @@ func TestPostLinkAndURIProduceSamePublishedList(t *testing.T) {
 			t.Setenv("CORDATA_IDENTIFIER", "owner.example")
 			t.Setenv("CORDATA_APP_PASSWORD", "test-password")
 			cmd := command()
-			cmd.SetArgs([]string{"--constellation=" + server.URL, "--appview=" + server.URL, "--login-pds=" + server.URL, "--slingshot=" + server.URL, "--write-interval=1ns", input})
+			cmd.SetArgs([]string{"--constellation=" + server.URL, "--appview=" + server.URL, "--login-pds=" + server.URL, "--slingshot=" + server.URL, "--write-interval=1ns", "at://missing.example/app.bsky.feed.post/post", input, input})
 			if err := cmd.ExecuteContext(ctx); err != nil {
 				t.Fatal(err)
 			}

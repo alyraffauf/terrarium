@@ -1,6 +1,6 @@
 # Cordata
 
-Cordata maintains a Bluesky moderation list of accounts that liked one post. The list includes the owner and any accounts the owner follows that liked the post.
+Cordata maintains a Bluesky moderation list of accounts that liked each configured post. The list includes the owner and any accounts the owner follows that liked the post.
 
 ## Run
 
@@ -10,7 +10,7 @@ Set `CORDATA_IDENTIFIER` and `CORDATA_APP_PASSWORD` for the list owner. Run Cord
 nix run .#cordata -- 'https://bsky.app/profile/bsky.app/post/3mzyk34ho4c27'
 ```
 
-Pass either a Bluesky post link or an AT URI. Cordata resolves a handle to a DID before choosing the list. The list has a title derived from its AT URI and a description that contains the post's DID-based AT URI. When Cordata renames a list whose old title was a handle-based post URI, it keeps that URI in the description.
+Pass one or more Bluesky post links or AT URIs as separate arguments. Each distinct post gets its own list and retry schedule. All posts share the owner’s session and write interval. Cordata resolves a handle to a DID before choosing the list. The list has a title derived from its AT URI and a description that contains the post's DID-based AT URI. When Cordata renames a list whose old title was a handle-based post URI, it keeps that URI in the description.
 
 The `maintaining list` log entry shows the list's AT URI. Subscribe to the list in Bluesky to use its moderation actions. Run `nix run .#cordata -- --help` for all options. Flags override the corresponding `CORDATA_` environment variables, which use uppercase names and underscores in place of hyphens.
 
@@ -29,5 +29,7 @@ helm upgrade --install cordata ./cordata/charts/cordata \
 	--set identifier=you.example.com --set existingSecret=cordata \
 	--set-string post='at://bsky.app/app.bsky.feed.post/3mzyk34ho4c27'
 ```
+
+For multiple posts, set the Helm value `posts` to a sequence of links or AT URIs. The single `post` value remains supported. Migrating under the same owner preserves each post’s list URI and subscriptions. Removing a post stops updates to its list.
 
 The [chart values](charts/cordata/values.yaml) cover endpoints and scan and write intervals. The chart runs one replica using the image from `ghcr.io/alyraffauf/terrarium/cordata`. Set `image.tag` to a published `sha-<commit>` tag to pin a release.

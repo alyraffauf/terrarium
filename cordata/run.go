@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
@@ -62,7 +63,32 @@ func (items inventory) RememberMember(_ context.Context, _, did, key string) err
 }
 func (items inventory) ForgetMember(_ context.Context, _, key string) error { return nil }
 
-func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, constellation, post, list string) error {
+// Serialize authenticated operations across posts. A worker holds the lock for
+// one membership decision, never for a whole scan or retry delay.
+type ownerSession struct {
+	*palustre.Session
+	mu sync.Mutex
+}
+
+func (owner *ownerSession) write(ctx context.Context, apply func() error) error {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if err := owner.Refresh(ctx); err != nil {
+		return err
+	}
+	return apply()
+}
+
+func (owner *ownerSession) reader() *xrpc.Client {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	client := *owner.Client
+	auth := *client.Auth
+	client.Auth = &auth
+	return &client
+}
+
+func syncPost(ctx context.Context, api *ownerSession, view *xrpc.Client, constellation, post, list string) error {
 	likers := map[string]bool{}
 	appErr := palustre.WalkPages(func(cursor string) (*string, error) {
 		page, err := bsky.FeedGetLikes(ctx, view, "", cursor, 100, post)
@@ -86,10 +112,10 @@ func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, con
 	if appErr != nil {
 		clear(likers)
 	}
-	linkErr := scanLikeBacklinks(ctx, api, constellation, post, likers)
+	linkErr := scanLikeBacklinks(ctx, api.Session, constellation, post, likers)
 	discoveryErr := errors.Join(appErr, linkErr)
 	items := inventory{}
-	err := palustre.WalkListItems(ctx, api.Client, func(uri, did, key string) error {
+	err := palustre.WalkListItems(ctx, api.reader(), func(uri, did, key string) error {
 		if uri == list {
 			items[did] = append(items[did], key)
 		}
@@ -106,10 +132,9 @@ func syncPost(ctx context.Context, api *palustre.Session, view *xrpc.Client, con
 	}
 	var firstFailure error
 	for _, did := range slices.Sorted(maps.Keys(subjects)) {
-		if err := api.Refresh(ctx); err != nil {
-			return err
-		}
-		if err := api.Reconcile(ctx, items, palustre.Membership{Target: post, ListURI: list, DID: did, Include: likers[did]}); err != nil {
+		if err := api.write(ctx, func() error {
+			return api.Reconcile(ctx, items, palustre.Membership{Target: post, ListURI: list, DID: did, Include: likers[did]})
+		}); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -183,6 +208,7 @@ func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backli
 type Config struct {
 	palustre.Config
 	AppView, Post, Constellation string
+	Posts                        []string
 	RescanInterval               time.Duration
 }
 
@@ -193,10 +219,22 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.RescanInterval <= 0 || cfg.WriteInterval < 0 {
 		return fmt.Errorf("rescan-interval must be positive and write-interval cannot be negative")
 	}
-	uri, err := parsePost(cfg.Post)
-	if err != nil {
-		return err
+	inputs := slices.Clone(cfg.Posts)
+	if cfg.Post != "" {
+		inputs = append(inputs, cfg.Post)
 	}
+	if len(inputs) == 0 {
+		return fmt.Errorf("at least one post is required")
+	}
+	uris := make([]syntax.ATURI, 0, len(inputs))
+	for _, input := range inputs {
+		uri, err := parsePost(input)
+		if err != nil {
+			return fmt.Errorf("%q: %w", input, err)
+		}
+		uris = append(uris, uri)
+	}
+	var err error
 	for _, base := range []*string{&cfg.AppView, &cfg.Slingshot, &cfg.Constellation} {
 		*base, err = palustre.NormalizePDS(*base)
 		if err != nil {
@@ -212,28 +250,45 @@ func Run(ctx context.Context, cfg Config) error {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	view := &xrpc.Client{Host: cfg.AppView, Client: httpClient}
 	api := &palustre.Session{Config: cfg.Config, HTTP: httpClient}
-	post, err := resolvePost(ctx, api, uri)
-	if err != nil {
-		return err
-	}
 	if err := api.Login(ctx); err != nil {
 		return err
 	}
-	key := palustre.RecordKey("cordata\n" + post)
-	list := "at://" + api.Client.Auth.Did + "/" + palustre.ListCollection + "/" + key
+	owner := &ownerSession{Session: api}
+	ownerDID := api.Client.Auth.Did
+	var claimed sync.Map
+	var workers sync.WaitGroup
+	for _, uri := range uris {
+		workers.Go(func() { maintainPost(ctx, owner, view, cfg, ownerDID, uri, &claimed) })
+	}
+	workers.Wait()
+	return nil
+}
+
+func maintainPost(ctx context.Context, owner *ownerSession, view *xrpc.Client, cfg Config, ownerDID string, uri syntax.ATURI, claimed *sync.Map) {
+	var post, list string
 	var retryDelay time.Duration
 	for ctx.Err() == nil {
-		err := api.Refresh(ctx)
-		if err == nil {
-			err = api.EnsurePostList(ctx, list, post)
+		var err error
+		if post == "" {
+			post, err = resolvePost(ctx, owner.Session, uri)
+			if err == nil {
+				if _, already := claimed.LoadOrStore(post, true); already {
+					return
+				}
+				key := palustre.RecordKey("cordata\n" + post)
+				list = "at://" + ownerDID + "/" + palustre.ListCollection + "/" + key
+				slog.Info("maintaining list", "post", post, "list", list)
+			}
 		}
 		if err == nil {
-			slog.Info("maintaining list", "post", post, "list", list)
-			err = syncPost(ctx, api, view, cfg.Constellation, post, list)
+			err = owner.write(ctx, func() error { return owner.EnsurePostList(ctx, list, post) })
+		}
+		if err == nil {
+			err = syncPost(ctx, owner, view, cfg.Constellation, post, list)
 		}
 		delay := cfg.RescanInterval
 		if err != nil && ctx.Err() == nil {
-			slog.Error("post sync failed", "error", err)
+			slog.Error("post sync failed", "post", uri, "error", err)
 			retryDelay = palustre.ScanRetryDelay(retryDelay, cfg.RescanInterval)
 			delay = retryDelay
 		} else {
@@ -243,5 +298,4 @@ func Run(ctx context.Context, cfg Config) error {
 			break
 		}
 	}
-	return nil
 }

@@ -31,11 +31,11 @@ func command() *cobra.Command {
 	config.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
 	config.AutomaticEnv()
 	cmd := &cobra.Command{
-		Use:           "cordata POST_URL",
-		Short:         "Maintain a moderation list of accounts that liked a post",
-		Long:          "Maintain a moderation list of everyone who liked a post. Pass a bsky.app post link or an AT URI. Flags override matching CORDATA_ environment variables (replace hyphens with underscores).",
+		Use:           "cordata POST_URL [POST_URL...]",
+		Short:         "Maintain one liker list per post",
+		Long:          "Maintain a moderation list for each post. Pass bsky.app post links or AT URIs. Flags override matching CORDATA_ environment variables (replace hyphens with underscores).",
 		Example:       "cordata 'at://bsky.app/app.bsky.feed.post/3mzyk34ho4c27'",
-		Args:          cobra.ExactArgs(1),
+		Args:          cobra.MinimumNArgs(1),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -52,7 +52,7 @@ func command() *cobra.Command {
 					WriteInterval: intervals.Write,
 				},
 				Constellation: config.GetString("constellation"), AppView: config.GetString("appview"),
-				Post:           args[0],
+				Posts:          args,
 				RescanInterval: intervals.Rescan,
 			})
 		},
