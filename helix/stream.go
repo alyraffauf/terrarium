@@ -20,6 +20,11 @@ func (db *store) selectCandidate(watched map[string]bool) func(context.Context, 
 			if event.MalformedFollow || watched[event.FollowSubject] {
 				return true, nil
 			}
+			// A new follow to an unrelated target cannot change membership.
+			// Updates and deletes can remove a previously qualifying follow.
+			if event.Payload.Operation == "create" {
+				return false, nil
+			}
 			return db.knownCandidate(ctx, event.Payload.Did)
 		default:
 			return false, nil

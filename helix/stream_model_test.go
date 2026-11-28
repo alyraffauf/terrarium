@@ -11,6 +11,7 @@ import (
 )
 
 func FuzzStreamRouting(f *testing.F) {
+	f.Add([]byte{3, 4, 68, 132}) // Known actor creates, updates, then deletes an unrelated follow.
 	f.Add([]byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 19, 35, 67})
 	f.Fuzz(func(t *testing.T, history []byte) {
 		db, err := openStore(":memory:")
@@ -38,11 +39,12 @@ func FuzzStreamRouting(f *testing.F) {
 			if b%8 == 6 {
 				collection = "app.bsky.feed.post"
 			}
-			payload := []byte(fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#%s","did":%q,"seq":%d,"time":"2026-01-01T00:00:00Z","collection":%q,"operation":"create","rkey":"ok","record":{"$type":"app.bsky.graph.follow","subject":%q}}}`, kind, did, i+1, collection, subject))
+			operation := []string{"create", "update", "delete"}[int(b>>6)%3]
+			payload := []byte(fmt.Sprintf(`{"$type":"message","payload":{"$type":"network.bsky.jetstream.subscribeEvents#%s","did":%q,"seq":%d,"time":"2026-01-01T00:00:00Z","collection":%q,"operation":%q,"rkey":"ok","record":{"$type":"app.bsky.graph.follow","subject":%q}}}`, kind, did, i+1, collection, operation, subject))
 			save := b&32 != 0
 			collector := followers.Collector{Store: db, Endpoint: "wss://jet.example", SelectCandidate: db.selectCandidate(map[string]bool{m.Actors[0]: true})}
 			err = collector.IngestFrame(ctx, m.Owner, payload, save)
-			queued := kind == "sync" || ((kind == "account" || kind == "identity") && known[did]) || (kind == "commit" && collection == "app.bsky.graph.follow" && (known[did] || b%8 == 3 || b%8 == 5))
+			queued := kind == "sync" || ((kind == "account" || kind == "identity") && known[did]) || (kind == "commit" && collection == "app.bsky.graph.follow" && (known[did] && operation != "create" || operation != "delete" && (b%8 == 3 || b%8 == 5)))
 			if err != nil {
 				t.Fatal(err)
 			}
