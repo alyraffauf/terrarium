@@ -66,6 +66,7 @@ func (items inventory) ForgetMember(_ context.Context, _, key string) error { re
 // Serialize authenticated operations across posts. A worker holds the lock for
 // one membership decision, never for a whole scan or retry delay.
 type ownerSession struct {
+	inventories ownerInventories
 	*palustre.Session
 	mu sync.Mutex
 }
@@ -88,7 +89,22 @@ func (owner *ownerSession) reader() *xrpc.Client {
 	return &client
 }
 
-func syncPost(ctx context.Context, api *ownerSession, view *xrpc.Client, constellation, post, list string) error {
+type likeRecordKey struct{ did, rkey string }
+
+type verificationRetry struct {
+	failures int
+	due      time.Time
+}
+
+type postScan struct {
+	post, list string
+	retries    map[likeRecordKey]verificationRetry
+}
+
+func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Client, constellation string) error {
+	post, list := scan.post, scan.list
+	partition := api.inventories.request(list)
+	defer partition.close()
 	likers := map[string]bool{}
 	appErr := palustre.WalkPages(func(cursor string) (*string, error) {
 		page, err := bsky.FeedGetLikes(ctx, view, "", cursor, 100, post)
@@ -112,21 +128,15 @@ func syncPost(ctx context.Context, api *ownerSession, view *xrpc.Client, constel
 	if appErr != nil {
 		clear(likers)
 	}
-	linkErr := scanLikeBacklinks(ctx, api.Session, constellation, post, likers)
+	uncertain, linkErr := scan.backlinks(ctx, api.Session, constellation, likers)
 	discoveryErr := errors.Join(appErr, linkErr)
-	items := inventory{}
-	err := palustre.WalkListItems(ctx, api.reader(), func(uri, did, key string) error {
-		if uri == list {
-			items[did] = append(items[did], key)
-		}
-		return nil
-	})
+	items, err := partition.read(ctx, api.reader())
 	if err != nil {
 		return err
 	}
 	subjects := maps.Clone(likers)
 	for did := range items {
-		if discoveryErr == nil {
+		if discoveryErr == nil && !uncertain[did] {
 			subjects[did] = true
 		}
 	}
@@ -146,12 +156,12 @@ func syncPost(ctx context.Context, api *ownerSession, view *xrpc.Client, constel
 	return errors.Join(firstFailure, discoveryErr)
 }
 
-func scanLikeBacklinks(ctx context.Context, api *palustre.Session, endpoint, post string, likers map[string]bool) error {
+func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endpoint string, likers map[string]bool) (map[string]bool, error) {
+	nextRetries := map[likeRecordKey]verificationRetry{}
 	const collection = "app.bsky.feed.like"
 	client := &xrpc.Client{Host: endpoint, Client: api.HTTP}
-	var verifyErr error
 	pageErr := palustre.WalkPages(func(cursor string) (*string, error) {
-		rows, next, err := palustre.BacklinksPage(ctx, client, post, collection, "subject.uri", cursor)
+		rows, next, err := palustre.BacklinksPage(ctx, client, scan.post, collection, "subject.uri", cursor)
 		if err != nil {
 			return nil, err
 		}
@@ -159,23 +169,46 @@ func scanLikeBacklinks(ctx context.Context, api *palustre.Session, endpoint, pos
 			if likers[row.Did] {
 				continue
 			}
-			ok, err := verifyLike(ctx, api, row, post)
+			key := likeRecordKey{did: row.Did, rkey: row.Rkey}
+			if _, deferred := nextRetries[key]; deferred {
+				continue
+			}
+			retry := scan.retries[key]
+			if time.Now().Before(retry.due) {
+				nextRetries[key] = retry
+				continue
+			}
+			ok, err := verifyLike(ctx, api, row, scan.post)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
-				if verifyErr == nil {
-					verifyErr = err
-				}
+				delay := palustre.VerificationRetryDelay(retry.failures)
+				nextRetries[key] = verificationRetry{failures: retry.failures + 1, due: time.Now().Add(delay)}
+				slog.Warn("like verification deferred", "post", scan.post, "did", row.Did, "rkey", row.Rkey, "retry_in", delay, "error", err)
 				continue
 			}
+			delete(scan.retries, key)
 			if ok {
 				likers[row.Did] = true
 			}
 		}
 		return next, nil
 	})
-	return errors.Join(pageErr, verifyErr)
+	if pageErr != nil {
+		// An interrupted walk can omit records still waiting for their retry.
+		for key, retry := range scan.retries {
+			if _, seen := nextRetries[key]; !seen && !likers[key.did] {
+				nextRetries[key] = retry
+			}
+		}
+	}
+	scan.retries = nextRetries
+	uncertain := make(map[string]bool, len(nextRetries))
+	for key := range nextRetries {
+		uncertain[key.did] = true
+	}
+	return uncertain, pageErr
 }
 
 func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backlink, post string) (bool, error) {
@@ -265,26 +298,26 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func maintainPost(ctx context.Context, owner *ownerSession, view *xrpc.Client, cfg Config, ownerDID string, uri syntax.ATURI, claimed *sync.Map) {
-	var post, list string
+	var scan postScan
 	var retryDelay time.Duration
 	for ctx.Err() == nil {
 		var err error
-		if post == "" {
-			post, err = resolvePost(ctx, owner.Session, uri)
+		if scan.post == "" {
+			scan.post, err = resolvePost(ctx, owner.Session, uri)
 			if err == nil {
-				if _, already := claimed.LoadOrStore(post, true); already {
+				if _, already := claimed.LoadOrStore(scan.post, true); already {
 					return
 				}
-				key := palustre.RecordKey("cordata\n" + post)
-				list = "at://" + ownerDID + "/" + palustre.ListCollection + "/" + key
-				slog.Info("maintaining list", "post", post, "list", list)
+				key := palustre.RecordKey("cordata\n" + scan.post)
+				scan.list = "at://" + ownerDID + "/" + palustre.ListCollection + "/" + key
+				slog.Info("maintaining list", "post", scan.post, "list", scan.list)
 			}
 		}
 		if err == nil {
-			err = owner.write(ctx, func() error { return owner.EnsurePostList(ctx, list, post) })
+			err = owner.write(ctx, func() error { return owner.EnsurePostList(ctx, scan.list, scan.post) })
 		}
 		if err == nil {
-			err = syncPost(ctx, owner, view, cfg.Constellation, post, list)
+			err = scan.sync(ctx, owner, view, cfg.Constellation)
 		}
 		delay := cfg.RescanInterval
 		if err != nil && ctx.Err() == nil {
