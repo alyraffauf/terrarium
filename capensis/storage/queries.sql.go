@@ -178,6 +178,28 @@ func (q *Queries) IsFollowed(ctx context.Context, did string) (bool, error) {
 	return exists, err
 }
 
+const jobStillCurrent = `-- name: JobStillCurrent :one
+SELECT EXISTS(
+ SELECT 1 FROM pending JOIN sync_state ON sync_state.id=1
+ WHERE pending.did=?1 AND pending.generation=?2
+ AND follow_applied=follow_version
+ AND EXISTS(SELECT 1 FROM follows WHERE follows.did=pending.did)=CAST(?3 AS INTEGER)
+)
+`
+
+type JobStillCurrentParams struct {
+	Did        string
+	Generation int64
+	Followed   int64
+}
+
+func (q *Queries) JobStillCurrent(ctx context.Context, arg JobStillCurrentParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, jobStillCurrent, arg.Did, arg.Generation, arg.Followed)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const memberKeys = `-- name: MemberKeys :many
 SELECT rkey FROM list_members WHERE pds=? AND did=? ORDER BY rkey
 `
@@ -266,6 +288,39 @@ INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE 
 func (q *Queries) QueueScan(ctx context.Context, did string) error {
 	_, err := q.db.ExecContext(ctx, queueScan, did)
 	return err
+}
+
+const readyJobs = `-- name: ReadyJobs :many
+SELECT did,generation,attempts FROM pending WHERE ready<=unixepoch() ORDER BY ready,did LIMIT ?1
+`
+
+type ReadyJobsRow struct {
+	Did        string
+	Generation int64
+	Attempts   int64
+}
+
+func (q *Queries) ReadyJobs(ctx context.Context, maxJobs int64) ([]ReadyJobsRow, error) {
+	rows, err := q.db.QueryContext(ctx, readyJobs, maxJobs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ReadyJobsRow{}
+	for rows.Next() {
+		var i ReadyJobsRow
+		if err := rows.Scan(&i.Did, &i.Generation, &i.Attempts); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const recoverStream = `-- name: RecoverStream :exec

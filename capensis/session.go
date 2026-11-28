@@ -1,7 +1,6 @@
 package capensis
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/bluesky-social/indigo/xrpc"
@@ -11,7 +10,8 @@ import (
 
 type session struct {
 	*palustre.Session
-	cfg Config
+	reads palustre.HostLimiter
+	cfg   Config
 }
 type resolution struct {
 	doc palustre.MiniDoc
@@ -23,15 +23,3 @@ func newSession(cfg Config, client *http.Client, owner *xrpc.Client) *session {
 }
 
 var xrpcCode = palustre.XRPCCode
-
-func (api *session) subject(ctx context.Context, db *store, did string) (subjectState, error) {
-	followed, err := db.isFollowed(ctx, did)
-	if err != nil {
-		return subjectState{}, err
-	}
-	subject := subjectState{did: did, excluded: followed || did == api.Client.Auth.Did}
-	if !subject.excluded {
-		subject.resolved.doc, subject.resolved.err = api.Resolve(ctx, did)
-	}
-	return subject, nil
-}

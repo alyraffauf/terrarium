@@ -66,6 +66,11 @@ func (api *listTarget) belongs(ctx context.Context, did string, resolved resolut
 		return false, nil
 	}
 	// A former member's PDS can confirm deletion when its DID no longer resolves.
+	release, err := api.reads.Acquire(ctx, api.pds)
+	if err != nil {
+		return false, err
+	}
+	defer release()
 	active, err := palustre.RepoActive(ctx, api.PDSVerificationClient(api.target), did)
 	if xrpcCode(err, "RepoNotFound") || xrpcCode(err, "RepoDeactivated") || xrpcCode(err, "RepoTakendown") {
 		return false, nil
@@ -80,27 +85,4 @@ func (api *listTarget) belongs(ctx context.Context, did string, resolved resolut
 		return false, resolveErr
 	}
 	return true, nil
-}
-
-type subjectState struct {
-	did         string
-	excluded    bool
-	beforeWrite func(context.Context) error
-	resolved    resolution
-}
-
-func (api *listTarget) reconcileSubject(ctx context.Context, subject subjectState, db *store) error {
-	if api.paused.Load() {
-		return nil
-	}
-	var err error
-	belongs := false
-	if !subject.excluded {
-		belongs, err = api.belongs(ctx, subject.did, subject.resolved)
-		if err != nil {
-			return err
-		}
-	}
-
-	return api.Reconcile(ctx, db, palustre.Membership{Target: api.pds, ListURI: api.listURI, DID: subject.did, Include: belongs, BeforeWrite: subject.beforeWrite})
 }

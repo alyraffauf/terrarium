@@ -1,6 +1,7 @@
 package capensis
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"testing"
@@ -11,6 +12,11 @@ import (
 	"github.com/alyraffauf/terrarium/internal/followers"
 	m "github.com/alyraffauf/terrarium/internal/syncmodel"
 )
+
+func reconcileTargets(ctx context.Context, targets []*listTarget, work job, db *store) error {
+	owner := targets[0].Client.Auth.Did
+	return checkAccount(ctx, targets, owner, work, db).apply(ctx, db)
+}
 
 func FuzzServiceMembership(f *testing.F) {
 	m.Service(f, true, func(t *testing.T, w *m.World) func(string, bool, int, bool) error {
@@ -227,4 +233,84 @@ func TestRetryPreservesMovedListItem(t *testing.T) {
 	if err != nil || len(keys) != 0 {
 		t.Fatalf("stale membership keys %v %v", keys, err)
 	}
+}
+
+// A public read can finish after a newer event for the same account or a
+// change to the owner's exclusions. Only the latest read may change the list.
+func FuzzBufferedMembership(f *testing.F) {
+	f.Add([]byte{0, 2, 1, 3, 2, 3})
+	f.Add([]byte{0, 2, 4, 3, 5, 2, 3})
+	f.Fuzz(func(t *testing.T, history []byte) {
+		ctx := t.Context()
+		db, err := openStore(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		world := &m.World{}
+		client := &http.Client{Transport: world}
+		api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+		targets := []*listTarget{{pds: m.Hosts[0], listURI: m.List(0), session: api, target: &xrpc.Client{Host: m.Hosts[0], Client: client}}}
+		if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
+			t.Fatal(err)
+		}
+		var checked *checkedAccount
+		var queued, followed, member, capturedMember bool
+		var version, capturedVersion int
+		for step, b := range history[:min(len(history), 40)] {
+			switch b % 6 {
+			case 0, 1:
+				world.Active = b%6 == 0
+				version++
+				queued = true
+				if err := db.Ingest(ctx, m.Subject, followers.Checkpoint{}, false); err != nil {
+					t.Fatal(err)
+				}
+			case 2:
+				if !queued {
+					continue
+				}
+				work, err := db.next(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				read := checkAccount(ctx, targets, m.Owner, work, db)
+				checked = &read
+				capturedVersion, capturedMember = version, world.Active && !followed
+			case 3:
+				if checked == nil {
+					continue
+				}
+				err := checked.apply(ctx, db)
+				checked = nil
+				if version != capturedVersion {
+					if !errors.Is(err, followers.ErrSnapshotSuperseded) {
+						t.Fatalf("step %d accepted superseded read: %v", step, err)
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					member, queued = capturedMember, false
+				}
+			case 4, 5:
+				next := b%6 == 4
+				if next != followed {
+					version++
+					queued = true
+				}
+				followed = next
+				follows := map[string]bool{}
+				if followed {
+					follows[m.Subject] = true
+				}
+				if err := db.ApplyFollowSnapshot(ctx, 0, follows); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if (world.RecordCount() == 1) != member || world.RecordCount() > 1 {
+				t.Fatalf("step %d has %d items, want member=%t", step, world.RecordCount(), member)
+			}
+		}
+	})
 }

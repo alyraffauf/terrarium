@@ -2,7 +2,6 @@ package capensis
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -87,6 +86,10 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		}
 	}()
 	// Authenticated operations have one owner, keeping token refresh serialized.
+	const readers = 4
+	pool := followers.NewReadPool[checkedAccount](ctx, readers)
+	defer pool.Close()
+	owner := api.Client.Auth.Did
 	nextFollows := time.Time{}
 	for ctx.Err() == nil {
 		requested, err := db.takeRescan(ctx)
@@ -121,20 +124,24 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			slog.Error("list inventory failed", "error", err)
 		}
 
-		work, err := db.next(ctx)
-		if errors.Is(err, sql.ErrNoRows) {
-			if !palustre.Pause(ctx, time.Second) {
-				break
+		if pool.Free() > 0 {
+			rows, err := db.queries.ReadyJobs(ctx, readers)
+			if err != nil {
+				return err
 			}
+			for _, row := range rows {
+				work := job{DID: row.Did, Generation: row.Generation, Attempts: int(row.Attempts)}
+				pool.Start(work.DID, func(ctx context.Context) checkedAccount {
+					return checkAccount(ctx, targets, owner, work, db)
+				})
+			}
+		}
+		checked, ok := pool.Next(ctx, time.Second)
+		if !ok {
 			continue
 		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
-		}
-		if err := reconcileTargets(ctx, targets, work, db); err != nil {
+		work := checked.work
+		if err := checked.apply(ctx, db); err != nil {
 			if errors.Is(err, followers.ErrSnapshotSuperseded) {
 				continue
 			}
@@ -188,7 +195,12 @@ func (api *listTarget) backfill(ctx context.Context, db *store) error {
 	seen := map[string]bool{}
 	cursor := ""
 	for {
+		release, err := api.reads.Acquire(ctx, api.pds)
+		if err != nil {
+			return err
+		}
 		page, err := atproto.SyncListRepos(ctx, api.target, cursor, 1000)
+		release()
 		if err != nil {
 			return err
 		}
@@ -237,29 +249,6 @@ func (api *session) prepareTargets(ctx context.Context, db *store) ([]*listTarge
 		targets = append(targets, &listTarget{session: api, pds: target.PDS, rescanInterval: api.cfg.RescanInterval, target: &xrpc.Client{Host: target.PDS, Client: api.HTTP}, listURI: uri})
 	}
 	return targets, nil
-}
-
-func reconcileTargets(ctx context.Context, targets []*listTarget, work job, db *store) error {
-	if len(targets) == 0 {
-		return db.finish(ctx, work)
-	}
-	subject, err := targets[0].subject(ctx, db, work.DID)
-	if err != nil {
-		return err
-	}
-	if subject.did != targets[0].Client.Auth.Did {
-		subject.beforeWrite = func(ctx context.Context) error { return followers.CheckSnapshot(ctx, db) }
-	}
-	var failures []error
-	for _, target := range targets {
-		if err := target.reconcileSubject(ctx, subject, db); err != nil {
-			failures = append(failures, fmt.Errorf("%s: %w", target.pds, err))
-		}
-	}
-	if len(failures) > 0 {
-		return errors.Join(failures...)
-	}
-	return db.finish(ctx, work)
 }
 
 // Each step reads at most one page, leaving membership work between pages.

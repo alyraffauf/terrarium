@@ -42,7 +42,7 @@ The list must belong to the owner, have the managed title and description or the
 
 ## Membership updates
 
-Capensis backfills accounts from each PDS at startup and every `--rescan-interval`, which defaults to six hours. Jetstream account, identity, and sync events queue accounts for checks. Accounts confirmed inactive by their PDS leave the list. Owner follow and unfollow events refresh exclusions, with a five-minute fallback. Failed exclusion fetches pause membership changes until a complete snapshot succeeds.
+Capensis backfills accounts from each PDS at startup and every `--rescan-interval`, which defaults to six hours. Jetstream account, identity, and sync events queue accounts for checks. Up to four accounts are checked concurrently, with at most two status or inventory reads per PDS. The writer rechecks the queued generation and owner exclusions before each list mutation. Accounts confirmed inactive by their PDS leave the list. Owner follow and unfollow events refresh exclusions, with a five-minute fallback. Failed exclusion fetches pause membership changes until a complete snapshot succeeds.
 
 Restarts resume the saved stream cursor. A stream gap triggers a new backfill.
 

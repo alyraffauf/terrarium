@@ -62,3 +62,14 @@ INSERT INTO follows SELECT did FROM new_follows;
 
 -- name: PendingCount :one
 SELECT COUNT(*) FROM pending;
+
+-- name: ReadyJobs :many
+SELECT did,generation,attempts FROM pending WHERE ready<=unixepoch() ORDER BY ready,did LIMIT sqlc.arg(max_jobs);
+
+-- name: JobStillCurrent :one
+SELECT EXISTS(
+ SELECT 1 FROM pending JOIN sync_state ON sync_state.id=1
+ WHERE pending.did=sqlc.arg(did) AND pending.generation=sqlc.arg(generation)
+ AND follow_applied=follow_version
+ AND EXISTS(SELECT 1 FROM follows WHERE follows.did=pending.did)=CAST(sqlc.arg(followed) AS INTEGER)
+);
