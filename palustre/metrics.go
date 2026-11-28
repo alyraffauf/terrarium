@@ -3,9 +3,11 @@ package palustre
 import (
 	"context"
 	"errors"
+	lex "github.com/bluesky-social/indigo/lex/util"
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -36,6 +38,13 @@ func (api *Session) StartMetrics(address string, pending func(context.Context) (
 
 func (api *Session) metricsHandler(pending func(context.Context) (int64, error), gauges ...QueueGauge) http.Handler {
 	registry := prometheus.NewRegistry()
+	latency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "terrarium_pds_verification_read_duration_seconds",
+		Help:    "Elapsed seconds per verification XRPC read, including response decoding and errors.",
+		Buckets: []float64{0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
+	}, []string{"method", "result"})
+	api.pdsReads.CompareAndSwap(nil, latency)
+	registry.MustRegister(api.pdsReads.Load(), prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_follow_inventories_completed_total", Help: "Completed candidate follow inventories, including verified empty inventories."}, func() float64 { return float64(api.FollowInventoriesCompleted.Load()) }))
 	registry.MustRegister(
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_members_added_total", Help: "Successful list-item creations since process start."}, func() float64 { return float64(api.MembersAdded.Load()) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_members_removed_total", Help: "Successful list-item deletions since process start, including duplicate cleanup."}, func() float64 { return float64(api.MembersRemoved.Load()) }),
@@ -79,4 +88,31 @@ func (collector *queueCollector) Collect(ch chan<- prometheus.Metric) {
 		return
 	}
 	ch <- prometheus.MustNewConstMetric(collector.desc, prometheus.GaugeValue, float64(count))
+}
+
+// PDSVerificationClient measures only reads made to verify a candidate.
+// Discovery, identity resolution and publication use their original clients.
+func (api *Session) PDSVerificationClient(client lex.LexClient) lex.LexClient {
+	if histogram := api.pdsReads.Load(); histogram != nil {
+		return measuredVerificationClient{client, histogram}
+	}
+	return client
+}
+
+type verificationReads = atomic.Pointer[prometheus.HistogramVec]
+
+type measuredVerificationClient struct {
+	client  lex.LexClient
+	latency *prometheus.HistogramVec
+}
+
+func (c measuredVerificationClient) LexDo(ctx context.Context, method, encoding, endpoint string, params map[string]any, body, out any) error {
+	start := time.Now()
+	err := c.client.LexDo(ctx, method, encoding, endpoint, params, body, out)
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	c.latency.WithLabelValues(endpoint, result).Observe(time.Since(start).Seconds())
+	return err
 }

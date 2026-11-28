@@ -221,7 +221,8 @@ func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backli
 		return false, err
 	}
 	client := &xrpc.Client{Host: doc.PDS, Client: api.HTTP}
-	record, err := atproto.RepoGetRecord(ctx, client, "", row.Collection, row.Did, row.Rkey)
+	reader := api.PDSVerificationClient(client)
+	record, err := atproto.RepoGetRecord(ctx, reader, "", row.Collection, row.Did, row.Rkey)
 	if cached && palustre.MayHaveMoved(err) {
 		if confirmErr := api.ConfirmPDS(ctx, row.Did, doc.PDS); confirmErr != nil {
 			return false, confirmErr
@@ -231,7 +232,7 @@ func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backli
 		return false, nil
 	}
 	if err != nil {
-		return false, palustre.VerifyRepoReadError(ctx, client, row.Did, err)
+		return false, palustre.VerifyRepoReadError(ctx, reader, row.Did, err)
 	}
 	if record.Uri != "at://"+row.Did+"/"+row.Collection+"/"+row.Rkey || record.Value == nil {
 		return false, fmt.Errorf("invalid like record for %s", row.Did)

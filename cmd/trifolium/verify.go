@@ -145,14 +145,15 @@ func parseFollow(did, rawURI string, value *lex.LexiconTypeDecoder) (key, subjec
 }
 
 func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) error {
-	record, err := atproto.RepoGetRecord(ctx, c, "", followCollection, j.did, j.key)
+	reader := a.api.PDSVerificationClient(c)
+	record, err := atproto.RepoGetRecord(ctx, reader, "", followCollection, j.did, j.key)
 	if j.cached && palustre.MayHaveMoved(err) {
 		if confirmErr := a.api.ConfirmPDS(ctx, j.did, c.Host); confirmErr != nil {
 			return confirmErr
 		}
 	}
 	if err != nil && !palustre.XRPCCode(err, "RecordNotFound") {
-		if statusErr := palustre.VerifyRepoReadError(ctx, c, j.did, err); statusErr != nil {
+		if statusErr := palustre.VerifyRepoReadError(ctx, reader, j.did, err); statusErr != nil {
 			return statusErr
 		}
 	}
@@ -188,7 +189,8 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 	}
 	seen := map[string]bool{}
 	records := map[string]string{}
-	next, err := palustre.ListFollowPage(ctx, c, j.did, cursor, func(key, subject string) error {
+	reader := a.api.PDSVerificationClient(c)
+	next, err := palustre.ListFollowPage(ctx, reader, j.did, cursor, func(key, subject string) error {
 		if seen[key] {
 			return fmt.Errorf("duplicate follow record key %q", key)
 		}
@@ -207,7 +209,7 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 		if j.did == a.owner {
 			return err
 		}
-		if statusErr := palustre.VerifyRepoReadError(ctx, c, j.did, err); statusErr != nil {
+		if statusErr := palustre.VerifyRepoReadError(ctx, reader, j.did, err); statusErr != nil {
 			return statusErr
 		}
 		return a.savePage(ctx, j, "", "", nil)
@@ -216,7 +218,8 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 }
 
 func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor string, records map[string]string) error {
-	return a.transaction(ctx, func(tx *sql.Tx) error {
+	completed := false
+	err := a.transaction(ctx, func(tx *sql.Tx) error {
 		var current int64
 		if err := tx.QueryRow("SELECT version FROM scans WHERE did=?", j.did).Scan(&current); err != nil {
 			return err
@@ -275,8 +278,13 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 			return err
 		}
 		_, err := tx.Exec("DELETE FROM scans WHERE did=?", j.did)
+		completed = err == nil
 		return err
 	})
+	if err == nil && completed {
+		a.api.FollowInventoriesCompleted.Add(1)
+	}
+	return err
 }
 func clearPages(tx *sql.Tx, did string) error {
 	for _, query := range []string{"DELETE FROM partial_targets WHERE did=?", "DELETE FROM staged WHERE actor=?", "DELETE FROM pages WHERE did=?", "DELETE FROM page_history WHERE did=?"} {

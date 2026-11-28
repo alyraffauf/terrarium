@@ -193,6 +193,8 @@ func FuzzInventory(f *testing.F) {
 			}
 			return 200, object{"records": []any{object{"uri": fmt.Sprintf("at://%s/%s/%d", owner, collection, i), "value": object{"$type": typ, "subject": subject, "list": listURI}}}, "cursor": fmt.Sprint(i + 1)}
 		})
+		scrape := api.metricsHandler(nil)
+		reader := api.PDSVerificationClient(api.Client)
 		pages := len(rows) + 1
 		for i, b := range rows {
 			s := fmt.Sprintf("did:web:%d.example", b%4)
@@ -215,9 +217,16 @@ func FuzzInventory(f *testing.F) {
 				return nil
 			})
 		} else if mode == 5 {
-			got, err = FetchTargetFollows(t.Context(), api.Client, owner, targets)
+			got, err = FetchTargetFollows(t.Context(), reader, owner, targets)
 		} else {
-			got, err = FetchFollows(t.Context(), api.Client, owner)
+			got, err = FetchFollows(t.Context(), reader, owner)
+		}
+		result := httptest.NewRecorder()
+		scrape.ServeHTTP(result, httptest.NewRequest("GET", "/metrics", nil))
+		const count = "terrarium_pds_verification_read_duration_seconds_count"
+		want := fmt.Sprintf("\n%s{method=\"com.atproto.repo.listRecords\",result=\"success\"} %d\n", count, calls)
+		if items && strings.Contains(result.Body.String(), count) || !items && !strings.Contains(result.Body.String(), want) {
+			t.Fatalf("inventory requests=%d, metrics=%s", calls, result.Body.String())
 		}
 		bad := mode == 1 || mode == 3 || mode == 2 && len(rows) > 0 || items && mode == 4 && len(rows) > 0
 		if bad != (err != nil) || err == nil && (!maps.Equal(expected, got) || calls != pages) || err != nil && !items && got != nil {

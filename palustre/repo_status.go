@@ -10,7 +10,7 @@ import (
 	"github.com/bluesky-social/indigo/xrpc"
 )
 
-func RepoActive(ctx context.Context, client *xrpc.Client, did string) (bool, error) {
+func RepoActive(ctx context.Context, client lex.LexClient, did string) (bool, error) {
 	// The generated boolean has the same zero value for false and an absent
 	// field. Require an explicit answer before a worker can remove membership.
 	var status struct {
@@ -32,7 +32,7 @@ func RepoActive(ctx context.Context, client *xrpc.Client, did string) (bool, err
 
 // VerifyRepoReadError checks ambiguous missing-repo responses against the
 // repository status on the confirmed PDS. A nil result confirms absence.
-func VerifyRepoReadError(ctx context.Context, c *xrpc.Client, did string, readErr error) error {
+func VerifyRepoReadError(ctx context.Context, c lex.LexClient, did string, readErr error) error {
 	var response *xrpc.Error
 	if !errors.As(readErr, &response) || response.StatusCode < 400 || response.StatusCode >= 500 {
 		return readErr

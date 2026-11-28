@@ -74,7 +74,8 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 		return subject, err
 	}
 	client := &xrpc.Client{Host: host, Client: api.HTTP}
-	active, err := palustre.RepoActive(ctx, client, did)
+	reader := api.PDSVerificationClient(client)
+	active, err := palustre.RepoActive(ctx, reader, did)
 	if cached && (palustre.MayHaveMoved(err) || err == nil && !active) {
 		current, refreshErr := api.RefreshDID(ctx, did)
 		if refreshErr != nil {
@@ -85,7 +86,7 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 				return subject, err
 			}
 			client.Host = current.PDS
-			active, err = palustre.RepoActive(ctx, client, did)
+			active, err = palustre.RepoActive(ctx, reader, did)
 		}
 	}
 	if xrpcCode(err, "RepoNotFound") || xrpcCode(err, "RepoDeactivated") || xrpcCode(err, "RepoTakendown") {
@@ -104,7 +105,10 @@ func (api *session) subject(ctx context.Context, db *store, did string, targets 
 	for _, target := range targets {
 		watched[target] = true
 	}
-	subject.follows, err = palustre.FetchTargetFollows(ctx, client, did, watched)
+	subject.follows, err = palustre.FetchTargetFollows(ctx, reader, did, watched)
+	if err == nil {
+		api.FollowInventoriesCompleted.Add(1)
+	}
 	return subject, err
 }
 

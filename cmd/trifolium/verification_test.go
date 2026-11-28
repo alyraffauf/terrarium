@@ -209,6 +209,9 @@ func FuzzResumeVerification(f *testing.F) {
 			page["second"] = targets[2]
 		}
 		requireOK(t, a.savePage(t.Context(), job, "", "", page))
+		if got := a.api.FollowInventoriesCompleted.Load(); got != 1 {
+			t.Fatalf("completed inventories = %d, want one", got)
+		}
 		err = change()
 		if stillFollows {
 			if !errors.Is(err, sql.ErrNoRows) {

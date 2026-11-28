@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/alyraffauf/terrarium/trifolium/storage"
 	"time"
 )
@@ -29,7 +30,7 @@ func openStore(t *testing.T, path string) *service {
 	requireOK(t, err)
 	db.SetMaxOpenConns(1)
 	t.Cleanup(func() { db.Close() })
-	a := &service{store: store{db}, owner: owner, stream: "stream", targets: map[string]bool{}}
+	a := &service{api: &palustre.Session{}, store: store{db}, owner: owner, stream: "stream", targets: map[string]bool{}}
 	requireOK(t, storage.Migrate(t.Context(), a.DB))
 	return a
 }

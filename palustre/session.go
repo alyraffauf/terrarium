@@ -25,19 +25,21 @@ type MiniDoc struct {
 
 // session owns authentication and the write limiter shared by every list.
 type Session struct {
-	identities            identityCache
-	Config                Config
-	HTTP                  *http.Client
-	Client                *xrpc.Client
-	Refreshed             time.Time
-	LastWrite             time.Time
-	MembersAdded          atomic.Uint64
-	MembersRemoved        atomic.Uint64
-	ChecksCompleted       atomic.Uint64
-	CheckRetries          atomic.Uint64
-	VerificationDeferred  atomic.Uint64
-	VerificationRecovered atomic.Uint64
-	retryAuthentication   authenticationRetry
+	pdsReads                   verificationReads
+	FollowInventoriesCompleted atomic.Uint64
+	identities                 identityCache
+	Config                     Config
+	HTTP                       *http.Client
+	Client                     *xrpc.Client
+	Refreshed                  time.Time
+	LastWrite                  time.Time
+	MembersAdded               atomic.Uint64
+	MembersRemoved             atomic.Uint64
+	ChecksCompleted            atomic.Uint64
+	CheckRetries               atomic.Uint64
+	VerificationDeferred       atomic.Uint64
+	VerificationRecovered      atomic.Uint64
+	retryAuthentication        authenticationRetry
 }
 
 func (api *Session) Resolve(ctx context.Context, identifier string) (MiniDoc, error) {

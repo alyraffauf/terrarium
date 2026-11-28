@@ -66,7 +66,7 @@ func (api *listTarget) belongs(ctx context.Context, did string, resolved resolut
 		return false, nil
 	}
 	// A former member's PDS can confirm deletion when its DID no longer resolves.
-	active, err := palustre.RepoActive(ctx, api.target, did)
+	active, err := palustre.RepoActive(ctx, api.PDSVerificationClient(api.target), did)
 	if xrpcCode(err, "RepoNotFound") || xrpcCode(err, "RepoDeactivated") || xrpcCode(err, "RepoTakendown") {
 		return false, nil
 	}

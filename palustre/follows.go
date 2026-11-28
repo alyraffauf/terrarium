@@ -10,21 +10,20 @@ import (
 	"github.com/bluesky-social/indigo/api/bsky"
 	"github.com/bluesky-social/indigo/atproto/syntax"
 	lexutil "github.com/bluesky-social/indigo/lex/util"
-	"github.com/bluesky-social/indigo/xrpc"
 )
 
 // Only complete snapshots may replace exclusions or drive membership removals.
-func FetchFollows(ctx context.Context, client *xrpc.Client, did string) (map[string]bool, error) {
+func FetchFollows(ctx context.Context, client lexutil.LexClient, did string) (map[string]bool, error) {
 	return fetchFollows(ctx, client, did, nil)
 }
 
 // FetchTargetFollows stops once every requested target is found. Missing targets
 // are absent only after all pages have been read successfully.
-func FetchTargetFollows(ctx context.Context, client *xrpc.Client, did string, targets map[string]bool) (map[string]bool, error) {
+func FetchTargetFollows(ctx context.Context, client lexutil.LexClient, did string, targets map[string]bool) (map[string]bool, error) {
 	return fetchFollows(ctx, client, did, targets)
 }
 
-func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets map[string]bool) (map[string]bool, error) {
+func fetchFollows(ctx context.Context, client lexutil.LexClient, did string, targets map[string]bool) (map[string]bool, error) {
 	follows := make(map[string]bool)
 	seen := make(map[string]bool)
 	cursor := ""
@@ -55,7 +54,7 @@ func fetchFollows(ctx context.Context, client *xrpc.Client, did string, targets 
 
 // ListFollowPage reads a PDS page and visits records with valid envelope URIs.
 // Malformed record values are reported with an empty subject.
-func ListFollowPage(ctx context.Context, client *xrpc.Client, did, cursor string, visit func(key, subject string) error) (string, error) {
+func ListFollowPage(ctx context.Context, client lexutil.LexClient, did, cursor string, visit func(key, subject string) error) (string, error) {
 	// Indigo's RepoListRecords decoder rejects the whole page if a single
 	// record has an unknown type or malformed value. Decode values separately.
 	var page struct {

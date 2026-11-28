@@ -31,6 +31,28 @@ nix run .#helix -- first.example.com second.example.com
 
 Helix prints the list URIs at startup. Keep its SQLite file when you restart. Capensis and Trifolium also use SQLite. Cordata uses the owner’s repository for persistence. Each daemon guide above includes its Helm configuration. Container images are published at `ghcr.io/alyraffauf/terrarium/<daemon>` with `latest` and `sha-<commit>` tags.
 
+## Measure verification cost
+
+All four daemons can serve Prometheus metrics at `/metrics`. Set `--metrics-address=:9090` and configure your scraper. The examples assume a scrape target label named `daemon`.
+
+This query shows the 95th percentile duration in seconds by daemon and XRPC method. Each observation covers one candidate PDS request through response decoding, including local connection waits. The `result` label records whether the RPC returned an error. Discovery and list writes use separate clients.
+
+```promql
+histogram_quantile(0.95, sum by (daemon, method, le) (
+  rate(terrarium_pds_verification_read_duration_seconds_bucket[10m])
+))
+```
+
+To measure pagination work, divide attempted follow pages by completed follow inventories over the same window.
+
+```promql
+sum by (daemon) (rate(terrarium_pds_verification_read_duration_seconds_count{method="com.atproto.repo.listRecords"}[10m]))
+/
+(sum by (daemon) (rate(terrarium_follow_inventories_completed_total[10m])) > 0)
+```
+
+The numerator includes failed page reads and pages from inventories still in progress. Helix counts an inventory when the candidate’s follow scan reaches its last page or finds all requested targets. Trifolium counts a current inventory after committing its final page or confirming the repository is inactive. Single-record checks and account status lookups contribute to their own latency histograms. Capensis and Cordata perform those checks without walking follow inventories.
+
 ## Build and test
 
 The four daemons share one Go module. [Palustre](palustre/README.md) holds their AT Protocol clients, publication logic, and SQLite setup. Each daemon owns its membership rules and deployment files.
