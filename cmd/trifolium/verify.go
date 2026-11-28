@@ -148,7 +148,9 @@ func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) er
 		}
 	}
 	if err != nil && !palustre.XRPCCode(err, "RecordNotFound") {
-		return err
+		if statusErr := palustre.VerifyRepoReadError(ctx, c, j.did, err); statusErr != nil {
+			return statusErr
+		}
 	}
 	var matches bool
 	if err == nil {
@@ -198,28 +200,15 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 				return confirmErr
 			}
 		}
-		if j.did == a.owner || !unavailableRepo(err) {
+		if j.did == a.owner {
 			return err
 		}
-		active, statusErr := palustre.RepoActive(ctx, c, j.did)
-		if unavailableRepo(statusErr) || statusErr == nil && !active {
-			// An inactive repository has no eligible follows. Discard any
-			// earlier pages before committing the empty inventory.
-			return a.savePage(ctx, j, "", "", nil)
+		if statusErr := palustre.VerifyRepoReadError(ctx, c, j.did, err); statusErr != nil {
+			return statusErr
 		}
-		return errors.Join(err, statusErr)
+		return a.savePage(ctx, j, "", "", nil)
 	}
 	return a.savePage(ctx, j, cursor, next, records)
-}
-
-func unavailableRepo(err error) bool {
-	var response *xrpc.Error
-	if !errors.As(err, &response) || response.StatusCode < 400 || response.StatusCode >= 500 {
-		return false
-	}
-	return palustre.XRPCCode(err, "RepoNotFound") ||
-		palustre.XRPCCode(err, "RepoDeactivated") ||
-		palustre.XRPCCode(err, "RepoTakendown")
 }
 
 func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor string, records map[string]string) error {
