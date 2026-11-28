@@ -183,10 +183,14 @@ func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endp
 				if ctx.Err() != nil {
 					return nil, ctx.Err()
 				}
+				api.VerificationDeferred.Add(1)
 				delay := palustre.VerificationRetryDelay(retry.failures)
 				nextRetries[key] = verificationRetry{failures: retry.failures + 1, due: now().Add(delay)}
 				slog.Warn("like verification deferred", "post", scan.post, "did", row.Did, "rkey", row.Rkey, "retry_in", delay, "error", err)
 				continue
+			}
+			if retry.failures > 0 {
+				api.VerificationRecovered.Add(1)
 			}
 			delete(scan.retries, key)
 			if ok {
@@ -241,9 +245,9 @@ func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backli
 
 type Config struct {
 	palustre.Config
-	AppView, Post, Constellation string
-	Posts                        []string
-	RescanInterval               time.Duration
+	AppView, Post, Constellation, MetricsAddress string
+	Posts                                        []string
+	RescanInterval                               time.Duration
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -284,6 +288,11 @@ func Run(ctx context.Context, cfg Config) error {
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	view := &xrpc.Client{Host: cfg.AppView, Client: httpClient}
 	api := &palustre.Session{Config: cfg.Config, HTTP: httpClient}
+	stopMetrics, err := api.StartMetrics(cfg.MetricsAddress, nil)
+	if err != nil {
+		return err
+	}
+	defer stopMetrics()
 	if err := api.Login(ctx); err != nil {
 		return err
 	}

@@ -33,3 +33,7 @@ helm upgrade --install cordata ./cordata/charts/cordata \
 For multiple posts, set the Helm value `posts` to a sequence of links or AT URIs. The single `post` value remains supported. Migrating under the same owner preserves each post’s list URI and subscriptions. Removing a post stops updates to its list.
 
 The [chart values](charts/cordata/values.yaml) cover endpoints and scan and write intervals. The chart runs one replica using the image from `ghcr.io/alyraffauf/terrarium/cordata`. Set `image.tag` to a published `sha-<commit>` tag to pin a release.
+
+## Metrics
+
+Set `--metrics-address=:9090` to expose Prometheus metrics at `/metrics`. The listener is disabled by default. `terrarium_verification_deferred_total` counts failed like record verification attempts scheduled for retry. `terrarium_verification_recovered_total` counts successful retries. `terrarium_members_added_total` and `terrarium_members_removed_total` count successful list-item writes across all managed lists. All four counters reset on restart.

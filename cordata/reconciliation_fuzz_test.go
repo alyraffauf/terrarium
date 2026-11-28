@@ -28,14 +28,15 @@ type remoteItem struct {
 	Subject string `json:"subject"`
 }
 type testRepository struct {
-	postScan          postScan
-	unavailable       map[string]bool
-	verificationReads map[string]int
-	links             map[string]string
-	likes             map[string]bool
-	items             map[string]remoteItem
-	fault             byte
-	writes            int
+	postScan            postScan
+	unavailable         map[string]bool
+	verificationReads   map[string]int
+	deferred, recovered uint64
+	links               map[string]string
+	likes               map[string]bool
+	items               map[string]remoteItem
+	fault               byte
+	writes              int
 }
 
 func wire(status int, body any) (*http.Response, error) {
@@ -180,7 +181,9 @@ func (repo *testRepository) scanAt(ctx context.Context, now time.Time) error {
 	client := &xrpc.Client{Host: "https://repo.test", Client: &http.Client{Transport: repo}, Auth: &xrpc.AuthInfo{Did: owner}}
 	api := &palustre.Session{HTTP: client.Client, Client: client, Refreshed: time.Now(), Config: palustre.Config{WriteInterval: time.Nanosecond}}
 	repo.postScan.post, repo.postScan.list = post, list
-	return repo.postScan.sync(ctx, &ownerSession{Session: api}, client, client.Host, func() time.Time { return now })
+	err := repo.postScan.sync(ctx, &ownerSession{Session: api}, client, client.Host, func() time.Time { return now })
+	repo.deferred, repo.recovered = api.VerificationDeferred.Load(), api.VerificationRecovered.Load()
+	return err
 }
 
 func FuzzLikerMembership(f *testing.F) {
@@ -392,6 +395,7 @@ func FuzzLikerVerificationHistory(f *testing.F) {
 		minute := 0
 		actors := [3]string{"did:example:a", "did:example:b", "did:example:c"}
 		for step, b := range history[:min(32, len(history))] {
+			var deferred, recovered uint64
 			previousMembers, previousWrites := members, repo.writes
 			interrupted := b&128 != 0
 			repo.fault = 0
@@ -428,9 +432,13 @@ func FuzzLikerVerificationHistory(f *testing.F) {
 				case minute >= nextProbe[i]:
 					probes[i]++
 					if repo.unavailable[actor] {
+						deferred++
 						delay[i] = min(60, max(1, 2*delay[i]))
 						nextProbe[i] = minute + delay[i]
 					} else {
+						if delay[i] != 0 {
+							recovered++
+						}
 						members[i] = true
 						delay[i] = 0
 						nextProbe[i] = 0
@@ -439,6 +447,9 @@ func FuzzLikerVerificationHistory(f *testing.F) {
 			}
 			if err := repo.scanAt(t.Context(), time.Unix(int64(minute)*60, 0)); (err != nil) != interrupted {
 				t.Fatalf("step %d: interrupted=%t, scan error=%v", step, interrupted, err)
+			}
+			if repo.deferred != deferred || repo.recovered != recovered {
+				t.Fatalf("step %d: deferred/recovered %d/%d, want %d/%d", step, repo.deferred, repo.recovered, deferred, recovered)
 			}
 			writes := 0
 			for i := range members {

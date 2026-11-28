@@ -115,6 +115,7 @@ func run(ctx context.Context) error {
 	constellation := flag.String("constellation", palustre.DefaultConstellation, "backlink index URL")
 	slingshot := flag.String("slingshot", "https://slingshot.aly.town", "identity resolver")
 	pace := flag.Duration("write-interval", palustre.DefaultFollowerWriteInterval, "minimum interval between list writes")
+	metrics := flag.String("metrics-address", "", "Prometheus listen address, such as :9090 (disabled by default)")
 	flag.Parse()
 	password := os.Getenv("TRIFOLIUM_APP_PASSWORD")
 	if *threshold < 1 || *interval <= 0 || *pace <= 0 || *identifier == "" || password == "" {
@@ -155,6 +156,11 @@ func run(ctx context.Context) error {
 	if err = storage.Migrate(ctx, db); err != nil {
 		return err
 	}
+	stopMetrics, err := api.StartMetrics(*metrics, nil)
+	if err != nil {
+		return err
+	}
+	defer stopMetrics()
 	if err = api.Login(ctx); err != nil {
 		return err
 	}

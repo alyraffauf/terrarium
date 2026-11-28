@@ -95,6 +95,9 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 		}
 	}
 	if err == nil && delay != 2 {
+		if j.attempts > 0 {
+			a.api.VerificationRecovered.Add(1)
+		}
 		return nil
 	}
 	increment := 0
@@ -114,6 +117,7 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 		return errors.Join(err, retry)
 	}
 	if err != nil {
+		a.api.VerificationDeferred.Add(1)
 		slog.Warn("follow verification deferred", "did", j.did, "retry_seconds", delay, "error", err)
 	}
 	return nil

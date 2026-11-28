@@ -79,3 +79,7 @@ The [chart values](charts/trifolium/values.yaml) cover cluster settings, endpoin
 Set `--constellation` or the Helm value `constellation` to override the backlink endpoint.
 
 Verification workers reuse successful Slingshot DID lookups for up to five minutes. Each daemon process caches at most 8,192 identities. A failed verification job retries after one minute, doubling on consecutive failures up to one hour. Owner inventory failures retry every minute because a pending owner scan pauses additions. Reaching the two-read limit for a PDS defers that job for two seconds without counting it as a failure.
+
+## Metrics
+
+Set `--metrics-address=:9090` to expose Prometheus metrics at `/metrics`. The listener is disabled by default. `terrarium_verification_deferred_total` counts failed follow record or inventory page verification attempts scheduled for retry. `terrarium_verification_recovered_total` counts successful retries. `terrarium_members_added_total` and `terrarium_members_removed_total` count successful list-item writes across all managed lists. All four counters reset on restart.

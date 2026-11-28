@@ -246,6 +246,7 @@ func FuzzScrapes(f *testing.F) {
 	f.Fuzz(func(t *testing.T, ns []byte) {
 		api := Session{}
 		var n byte
+		verification := api.metricsHandler(nil)
 		h := api.metricsHandler(func(context.Context) (int64, error) {
 			if n == 255 {
 				return 0, errors.New("unavailable")
@@ -259,6 +260,15 @@ func FuzzScrapes(f *testing.F) {
 			api.MembersRemoved.Store(uint64(i + 1))
 			api.ChecksCompleted.Store(uint64(i + 2))
 			api.CheckRetries.Store(uint64(i + 3))
+			api.VerificationDeferred.Store(uint64(i + 4))
+			api.VerificationRecovered.Store(uint64(i + 5))
+			v := httptest.NewRecorder()
+			verification.ServeHTTP(v, httptest.NewRequest("GET", "/metrics", nil))
+			for k, name := range []string{"verification_deferred_total", "verification_recovered_total"} {
+				if v.Code != 200 || !strings.Contains(v.Body.String(), fmt.Sprintf("\nterrarium_%s %d\n", name, i+4+k)) {
+					t.Fatal(name, v.Body.String())
+				}
+			}
 			w := httptest.NewRecorder()
 			h.ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
 			if b == 255 {

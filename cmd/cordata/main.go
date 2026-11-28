@@ -52,12 +52,14 @@ func command() *cobra.Command {
 					WriteInterval: intervals.Write,
 				},
 				Constellation: config.GetString("constellation"), AppView: config.GetString("appview"),
+				MetricsAddress: config.GetString("metrics-address"),
 				Posts:          args,
 				RescanInterval: intervals.Rescan,
 			})
 		},
 	}
 	flags := cmd.Flags()
+	flags.String("metrics-address", "", "Prometheus listen address, such as :9090 (disabled by default)")
 	flags.String("identifier", "", "List owner's handle or DID")
 	flags.String("app-password", "", "List owner's app password")
 	flags.String("login-pds", "", "List owner's PDS (default: resolve automatically)")

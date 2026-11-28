@@ -39,10 +39,19 @@ func (api *Session) metricsHandler(pending func(context.Context) (int64, error),
 	registry.MustRegister(
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_members_added_total", Help: "Successful list-item creations since process start."}, func() float64 { return float64(api.MembersAdded.Load()) }),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_members_removed_total", Help: "Successful list-item deletions since process start, including duplicate cleanup."}, func() float64 { return float64(api.MembersRemoved.Load()) }),
-		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_checks_completed_total", Help: "Successful membership checks since process start."}, func() float64 { return float64(api.ChecksCompleted.Load()) }),
-		prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_check_retries_total", Help: "Failed membership checks scheduled for retry since process start."}, func() float64 { return float64(api.CheckRetries.Load()) }),
 	)
-	gauges = append(gauges, QueueGauge{Name: "terrarium_pending_accounts", Help: "Queued accounts, including in-flight checks and delayed retries.", Read: pending})
+	if pending == nil {
+		registry.MustRegister(
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_verification_deferred_total", Help: "Verification attempts deferred after a failed read."}, func() float64 { return float64(api.VerificationDeferred.Load()) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_verification_recovered_total", Help: "Verification retries that completed successfully."}, func() float64 { return float64(api.VerificationRecovered.Load()) }),
+		)
+	} else {
+		registry.MustRegister(
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_checks_completed_total", Help: "Successful membership checks since process start."}, func() float64 { return float64(api.ChecksCompleted.Load()) }),
+			prometheus.NewCounterFunc(prometheus.CounterOpts{Name: "terrarium_check_retries_total", Help: "Failed membership checks scheduled for retry since process start."}, func() float64 { return float64(api.CheckRetries.Load()) }),
+		)
+		gauges = append(gauges, QueueGauge{Name: "terrarium_pending_accounts", Help: "Queued accounts, including in-flight checks and delayed retries.", Read: pending})
+	}
 	for _, gauge := range gauges {
 		registry.MustRegister(&queueCollector{read: gauge.Read, desc: prometheus.NewDesc(gauge.Name, gauge.Help, nil, nil)})
 	}
