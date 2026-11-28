@@ -41,6 +41,8 @@ func (l *HostLimiter) Acquire(ctx context.Context, host string) (release func(),
 			delete(l.hosts, host)
 		}
 	}
+	resume := HealthWait(ctx)
+	defer resume()
 	select {
 	case slots.active <- struct{}{}:
 		return func() { <-slots.active; done() }, nil

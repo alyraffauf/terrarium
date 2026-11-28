@@ -22,7 +22,7 @@ func processBatch(ctx context.Context, targets []*listTarget, jobs []job, db *st
 	if len(actors) == 0 {
 		return nil
 	}
-	queue := readQueue{ReadPool: followers.NewReadPool[checked](ctx, len(jobs))}
+	queue := readQueue{ReadPool: followers.NewReadPool[checked](ctx, len(jobs), nil)}
 	defer queue.Close()
 	for _, work := range jobs {
 		queue.start(targets[0].session, db, work, actors)
@@ -361,7 +361,7 @@ func TestReadPoolRefillsWhileOneCandidateStalls(t *testing.T) {
 	client := &http.Client{Transport: world}
 	api := newSession(Config{Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
 	targets := []*listTarget{{actor: m.Actors[0], session: api, listURI: m.List(0)}}
-	queue := readQueue{ReadPool: followers.NewReadPool[checked](ctx, readConcurrency)}
+	queue := readQueue{ReadPool: followers.NewReadPool[checked](ctx, readConcurrency, nil)}
 	defer queue.Close()
 	for i := range readConcurrency + 2 {
 		if err := db.queueScan(ctx, fmt.Sprintf("did:example:candidate%d", i)); err != nil {

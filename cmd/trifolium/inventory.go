@@ -37,7 +37,10 @@ func (a *service) auditMembers(ctx context.Context, clusters []*cluster) error {
 			return err
 		}
 		defer stmt.Close()
-		for _, v := range items {
+		for i, v := range items {
+			if i%1000 == 0 {
+				palustre.HealthProgress(ctx)
+			}
 			if _, err := stmt.Exec(v.cluster, v.did, v.key); err != nil {
 				return err
 			}

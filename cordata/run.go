@@ -65,6 +65,7 @@ func (items inventory) ForgetMember(_ context.Context, _, key string) error { re
 // Serialize authenticated operations across posts. A worker holds the lock for
 // one membership decision, never for a whole scan or retry delay.
 type ownerSession struct {
+	health      *palustre.Health
 	inventories ownerInventories
 	readSlots   chan struct{}
 	readHosts   palustre.HostLimiter
@@ -74,7 +75,9 @@ type ownerSession struct {
 }
 
 func (owner *ownerSession) write(ctx context.Context, apply func() error) error {
+	resume := palustre.HealthWait(ctx)
 	owner.mu.Lock()
+	resume()
 	defer owner.mu.Unlock()
 	if err := owner.Refresh(ctx); err != nil {
 		return err
@@ -82,8 +85,10 @@ func (owner *ownerSession) write(ctx context.Context, apply func() error) error 
 	return apply()
 }
 
-func (owner *ownerSession) reader() *xrpc.Client {
+func (owner *ownerSession) reader(ctx context.Context) *xrpc.Client {
+	resume := palustre.HealthWait(ctx)
 	owner.mu.Lock()
+	resume()
 	defer owner.mu.Unlock()
 	client := *owner.Client
 	auth := *client.Auth
@@ -132,7 +137,7 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	}
 	uncertain, linkErr := scan.backlinks(ctx, api, constellation, likers, now)
 	discoveryErr := errors.Join(appErr, linkErr)
-	items, err := partition.read(ctx, api.reader())
+	items, err := partition.read(ctx, api.reader(ctx))
 	if err != nil {
 		return err
 	}
@@ -144,6 +149,7 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	}
 	var firstFailure error
 	for _, did := range slices.Sorted(maps.Keys(subjects)) {
+		palustre.HealthProgress(ctx)
 		if err := api.write(ctx, func() error {
 			return api.Reconcile(ctx, items, palustre.Membership{Target: post, ListURI: list, DID: did, Include: likers[did]})
 		}); err != nil {
@@ -193,13 +199,18 @@ func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint
 		api.initSlots.Do(func() { api.readSlots = make(chan struct{}, 4) })
 		var workers sync.WaitGroup
 		for _, records := range byActor {
+			resume := palustre.HealthWait(ctx)
 			select {
 			case api.readSlots <- struct{}{}:
+				resume()
 			case <-ctx.Done():
+				resume()
 				workers.Wait()
 				return nil, ctx.Err()
 			}
 			workers.Go(func() {
+				ctx, done := api.health.Worker(ctx)
+				defer done()
 				defer func() { <-api.readSlots }()
 				for _, row := range records {
 					ok, err := verifyLike(ctx, api, row, scan.post)
@@ -210,7 +221,9 @@ func (scan *postScan) backlinks(ctx context.Context, api *ownerSession, endpoint
 				}
 			})
 		}
+		resume := palustre.HealthWait(ctx)
 		workers.Wait()
+		resume()
 		close(results)
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -344,7 +357,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := api.Login(ctx); err != nil {
 		return err
 	}
-	owner := &ownerSession{Session: api}
+	owner := &ownerSession{Session: api, health: health}
 	ownerDID := api.Client.Auth.Did
 	var claimed sync.Map
 	var workers sync.WaitGroup
@@ -357,9 +370,12 @@ func Run(ctx context.Context, cfg Config) error {
 }
 
 func maintainPost(ctx context.Context, owner *ownerSession, view *xrpc.Client, cfg Config, ownerDID string, uri syntax.ATURI, claimed *sync.Map) {
+	ctx, done := owner.health.Worker(ctx)
+	defer done()
 	var scan postScan
 	var retryDelay time.Duration
 	for ctx.Err() == nil {
+		palustre.HealthProgress(ctx)
 		var err error
 		if scan.post == "" {
 			scan.post, err = resolvePost(ctx, owner.Session, uri)

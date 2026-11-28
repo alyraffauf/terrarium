@@ -92,13 +92,16 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	}()
 	// Authenticated operations have one owner, keeping token refresh serialized.
 	const readers = 4
-	pool := followers.NewReadPool[checkedAccount](ctx, readers)
+	pool := followers.NewReadPool[checkedAccount](ctx, readers, health)
 	defer pool.Close()
 	owner := api.Client.Auth.Did
 	nextFollows := time.Time{}
+	writerCtx, done := health.Worker(ctx)
+	defer done()
 	health.Ready()
-	for ctx.Err() == nil {
-		requested, err := db.takeRescan(ctx)
+	for writerCtx.Err() == nil {
+		palustre.HealthProgress(writerCtx)
+		requested, err := db.takeRescan(writerCtx)
 		if err != nil {
 			return err
 		}
@@ -108,17 +111,17 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			default:
 			}
 		}
-		if err := api.Refresh(ctx); err != nil {
+		if err := api.Refresh(writerCtx); err != nil {
 			slog.Error("session refresh failed", "error", err)
-			if !palustre.Pause(ctx, time.Minute) {
+			if !palustre.Pause(writerCtx, time.Minute) {
 				break
 			}
 			continue
 		}
 		forceFollowRefresh := !time.Now().Before(nextFollows)
-		if err := followers.RefreshSnapshot(ctx, db, api.Client, forceFollowRefresh); err != nil {
+		if err := followers.RefreshSnapshot(writerCtx, db, api.Client, forceFollowRefresh); err != nil {
 			slog.Error("follow refresh failed", "error", err)
-			if !palustre.Pause(ctx, 10*time.Second) {
+			if !palustre.Pause(writerCtx, 10*time.Second) {
 				break
 			}
 			continue
@@ -126,36 +129,36 @@ func Run(ctx context.Context, cfg Config) (result error) {
 		if forceFollowRefresh {
 			nextFollows = time.Now().Add(5 * time.Minute)
 		}
-		if err := inventory.step(ctx, targets, db); err != nil {
+		if err := inventory.step(writerCtx, targets, db); err != nil {
 			slog.Error("list inventory failed", "error", err)
 		}
 
 		if pool.Free() > 0 {
-			rows, err := db.queries.ReadyJobs(ctx, readers)
+			rows, err := db.queries.ReadyJobs(writerCtx, readers)
 			if err != nil {
 				return err
 			}
 			for _, row := range rows {
 				work := job{DID: row.Did, Generation: row.Generation, Attempts: int(row.Attempts)}
-				pool.Start(work.DID, func(ctx context.Context) checkedAccount {
-					return checkAccount(ctx, targets, owner, work, db)
+				pool.Start(work.DID, func(readCtx context.Context) checkedAccount {
+					return checkAccount(readCtx, targets, owner, work, db)
 				})
 			}
 		}
-		checked, ok := pool.Next(ctx, time.Second)
+		checked, ok := pool.Next(writerCtx, time.Second)
 		if !ok {
 			continue
 		}
 		work := checked.work
-		if err := checked.apply(ctx, db); err != nil {
+		if err := checked.apply(writerCtx, db); err != nil {
 			if errors.Is(err, followers.ErrSnapshotSuperseded) {
 				continue
 			}
-			if ctx.Err() != nil {
+			if writerCtx.Err() != nil {
 				return nil
 			}
 			slog.Warn("membership update failed", "did", work.DID, "error", err)
-			if err := db.retry(ctx, work); err != nil {
+			if err := db.retry(writerCtx, work); err != nil {
 				return err
 			}
 			api.CheckRetries.Add(1)

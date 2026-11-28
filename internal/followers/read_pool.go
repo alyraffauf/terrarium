@@ -6,6 +6,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/alyraffauf/terrarium/palustre"
 )
 
 // ReadPool runs bounded public reads alongside a single writer. The writer
@@ -16,6 +18,7 @@ type ReadPool[T any] struct {
 	busy    map[string]bool
 	results chan readResult[T]
 	workers sync.WaitGroup
+	health  *palustre.Health
 }
 
 type readResult[T any] struct {
@@ -23,9 +26,9 @@ type readResult[T any] struct {
 	value T
 }
 
-func NewReadPool[T any](ctx context.Context, limit int) *ReadPool[T] {
+func NewReadPool[T any](ctx context.Context, limit int, health *palustre.Health) *ReadPool[T] {
 	ctx, cancel := context.WithCancel(ctx)
-	return &ReadPool[T]{ctx: ctx, cancel: cancel, busy: map[string]bool{}, results: make(chan readResult[T], limit)}
+	return &ReadPool[T]{health: health, ctx: ctx, cancel: cancel, busy: map[string]bool{}, results: make(chan readResult[T], limit)}
 }
 
 func (p *ReadPool[T]) Free() int            { return cap(p.results) - len(p.busy) }
@@ -38,7 +41,11 @@ func (p *ReadPool[T]) Start(did string, read func(context.Context) T) bool {
 		return false
 	}
 	p.busy[did] = true
-	p.workers.Go(func() { p.results <- readResult[T]{did, read(p.ctx)} })
+	p.workers.Go(func() {
+		ctx, done := p.health.Worker(p.ctx)
+		defer done()
+		p.results <- readResult[T]{did, read(ctx)}
+	})
 	return true
 }
 

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
@@ -231,4 +232,46 @@ func btoi(b bool) int {
 		return 1
 	}
 	return 0
+}
+
+// Waiting for a shared inventory is healthy while its reader keeps working.
+// If the holder itself stalls, its waiting peer must not mask the failure.
+func TestPostHealthWhileWaitingForSharedInventory(t *testing.T) {
+	health, err := palustre.StartHealth("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer health.Close()
+	health.Ready()
+
+	synctest.Test(t, func(t *testing.T) {
+		request := inventoryRequest{owner: &ownerInventories{}, ready: make(chan struct{})}
+		holder, done := health.Worker(t.Context())
+		defer done()
+		finished := make(chan struct{})
+		go func() {
+			defer close(finished)
+			waiter, done := health.Worker(t.Context())
+			defer done()
+			_, _ = request.read(waiter, nil)
+		}()
+		synctest.Wait()
+		probe := func() int {
+			rec := httptest.NewRecorder()
+			health.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
+			return rec.Code
+		}
+		for range 7 {
+			time.Sleep(time.Minute)
+			palustre.HealthProgress(holder)
+		}
+		duringProgress := probe()
+		time.Sleep(6 * time.Minute)
+		duringStall := probe()
+		close(request.ready)
+		<-finished
+		if duringProgress != http.StatusOK || duringStall != http.StatusServiceUnavailable {
+			t.Fatalf("progress status=%d, stalled status=%d", duringProgress, duringStall)
+		}
+	})
 }

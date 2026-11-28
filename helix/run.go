@@ -100,11 +100,14 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	// Authenticated operations have one owner, keeping token refresh serialized.
 	nextFollows := time.Time{}
 	var nextInventory time.Time
-	reads := readQueue{ReadPool: followers.NewReadPool[checked](ctx, readConcurrency)}
+	reads := readQueue{ReadPool: followers.NewReadPool[checked](ctx, readConcurrency, health)}
 	defer reads.Close()
+	writerCtx, done := health.Worker(ctx)
+	defer done()
 	health.Ready()
-	for ctx.Err() == nil {
-		requested, err := db.takeRescan(ctx)
+	for writerCtx.Err() == nil {
+		palustre.HealthProgress(writerCtx)
+		requested, err := db.takeRescan(writerCtx)
 		if err != nil {
 			return err
 		}
@@ -114,17 +117,17 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			default:
 			}
 		}
-		if err := api.Refresh(ctx); err != nil {
+		if err := api.Refresh(writerCtx); err != nil {
 			slog.Error("session refresh failed", "error", err)
-			if !palustre.Pause(ctx, time.Minute) {
+			if !palustre.Pause(writerCtx, time.Minute) {
 				break
 			}
 			continue
 		}
 		forceFollowRefresh := !time.Now().Before(nextFollows)
-		if err := followers.RefreshSnapshot(ctx, db, api.Client, forceFollowRefresh); err != nil {
+		if err := followers.RefreshSnapshot(writerCtx, db, api.Client, forceFollowRefresh); err != nil {
 			slog.Error("follow refresh failed", "error", err)
-			if !palustre.Pause(ctx, 10*time.Second) {
+			if !palustre.Pause(writerCtx, 10*time.Second) {
 				break
 			}
 			continue
@@ -133,17 +136,17 @@ func Run(ctx context.Context, cfg Config) (result error) {
 			nextFollows = time.Now().Add(5 * time.Minute)
 		}
 		if !time.Now().Before(nextInventory) {
-			if err := inventory.step(ctx, targets, db, rescan); err != nil {
+			if err := inventory.step(writerCtx, targets, db, rescan); err != nil {
 				slog.Error("list inventory failed", "error", err)
 			}
 			nextInventory = time.Now().Add(time.Second)
 		}
-		if err := reads.fill(ctx, targets, db); err != nil {
+		if err := reads.fill(writerCtx, targets, db); err != nil {
 			return err
 		}
-		if result, ok := reads.Next(ctx, time.Second); ok {
-			if err := completeCheck(ctx, targets, db, result); err != nil {
-				if ctx.Err() != nil {
+		if result, ok := reads.Next(writerCtx, time.Second); ok {
+			if err := completeCheck(writerCtx, targets, db, result); err != nil {
+				if writerCtx.Err() != nil {
 					return nil
 				}
 				return err

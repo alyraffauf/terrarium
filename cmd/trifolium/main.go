@@ -96,6 +96,7 @@ func (a *cluster) publish(ctx context.Context) error {
 }
 func work(ctx context.Context, name string, next func(context.Context) error) {
 	for ctx.Err() == nil {
+		palustre.HealthProgress(ctx)
 		if err := next(ctx); err != nil {
 			if !errors.Is(err, sql.ErrNoRows) {
 				slog.Warn(name, "error", err)
@@ -188,13 +189,18 @@ func run(ctx context.Context) error {
 	wg.Go(func() { a.backfill(ctx) })
 	for i := range 4 {
 		wg.Go(func() {
+			ctx, done := health.Worker(ctx)
+			defer done()
 			work(ctx, "follow verification", func(ctx context.Context) error { return a.verify(ctx, i != 0) })
 		})
 	}
 	wg.Go(func() {
+		ctx, done := health.Worker(ctx)
+		defer done()
 		var nextAudit time.Time
 		var auditDelay time.Duration
 		for ctx.Err() == nil {
+			palustre.HealthProgress(ctx)
 			if !time.Now().Before(nextAudit) {
 				if err := a.auditMembers(ctx, lists); err != nil {
 					slog.Warn("list-item inventory", "error", err)

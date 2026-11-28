@@ -51,6 +51,8 @@ func (req *inventoryRequest) read(ctx context.Context, client *xrpc.Client) (inv
 		owner.mu.Lock()
 		if ready := req.ready; ready != nil {
 			owner.mu.Unlock()
+			resume := palustre.HealthWait(ctx)
+			defer resume()
 			select {
 			case <-ready:
 				return req.items, req.err
@@ -60,10 +62,13 @@ func (req *inventoryRequest) read(ctx context.Context, client *xrpc.Client) (inv
 		}
 		if walking := owner.walking; walking != nil {
 			owner.mu.Unlock()
+			resume := palustre.HealthWait(ctx)
 			select {
 			case <-walking:
+				resume()
 				continue
 			case <-ctx.Done():
+				resume()
 				return nil, ctx.Err()
 			}
 		}
