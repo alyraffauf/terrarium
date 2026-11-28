@@ -18,7 +18,7 @@ The `maintaining list` log entry shows the list's AT URI. Subscribe to the list 
 
 Cordata combines AppView likes with Constellation backlinks. For likers found only through Constellation, it checks the like record on the actor’s PDS. If either scan fails, Cordata can add confirmed likers and retains existing members. After a complete scan, it also removes accounts absent from both sources. Set `--constellation` to use a different backlink endpoint. The owner's repository stores the list and its items across restarts.
 
-Cordata waits five minutes after a successful pass and one minute after a failed pass. Set `--rescan-interval` to change the delay after successful passes. Set `--write-interval` to change the minimum interval between writes, which defaults to ten seconds.
+Cordata waits five minutes after a successful pass by default. Failures retry after one minute, doubling on consecutive failures up to the normal scan interval (with a one-minute floor and a one-hour ceiling). Set `--rescan-interval` to change the delay after successful passes. Set `--write-interval` to change the minimum interval between writes, which defaults to ten seconds.
 
 ## Deploy to Kubernetes
 

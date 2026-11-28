@@ -20,7 +20,8 @@ const listCollection = palustre.ListCollection
 const itemCollection = palustre.ItemCollection
 
 type listTarget struct {
-	suspended atomic.Bool
+	checkRetry time.Duration
+	suspended  atomic.Bool
 	*session
 	actor          string
 	rescanInterval time.Duration

@@ -155,8 +155,9 @@ func Run(ctx context.Context, cfg Config) (result error) {
 
 func rescanLoop(ctx context.Context, targets []*listTarget, db *store, rescan <-chan struct{}) {
 	next := make([]time.Time, len(targets))
+	failures := make([]time.Duration, len(next))
 	for ctx.Err() == nil {
-		scanDue(ctx, targets, db, next, time.Now())
+		scanDue(ctx, targets, db, next, failures, time.Now())
 		deadline := next[0]
 		for _, t := range next {
 			if t.Before(deadline) {
@@ -264,20 +265,23 @@ func reconcileTargets(ctx context.Context, targets []*listTarget, work job, db *
 // Each step reads at most one page, leaving membership work between pages.
 // The owner's item collection is shared by all targets and is scanned once.
 type inventoryScan struct {
-	cursor string
-	next   time.Time
-	lists  map[string]*listTarget
-	checks map[string]time.Time
-	rescan chan<- struct{}
-	seen   map[string]bool
+	retryDelay time.Duration
+	cursor     string
+	next       time.Time
+	lists      map[string]*listTarget
+	checks     map[string]time.Time
+	rescan     chan<- struct{}
+	seen       map[string]bool
 }
 
 func (scan *inventoryScan) checkTarget(ctx context.Context, target *listTarget, db *store) {
 	delay := target.rescanInterval
 	if err := target.checkList(ctx, db); err != nil {
 		slog.Error("list check failed", "pds", target.pds, "error", err)
-		delay = time.Minute
+		target.checkRetry = palustre.ScanRetryDelay(target.checkRetry, target.rescanInterval)
+		delay = target.checkRetry
 	} else {
+		target.checkRetry = 0
 		target.refreshListIcon(ctx)
 		slog.Info("maintaining list", "pds", target.pds, "uri", target.listURI, "name", palustre.ListTitle(target.listURI))
 	}
@@ -346,13 +350,16 @@ func (scan *inventoryScan) step(ctx context.Context, targets []*listTarget, db *
 	scan.seen = nil
 	delay := api.rescanInterval
 	if err != nil {
-		delay = time.Minute
+		scan.retryDelay = palustre.ScanRetryDelay(scan.retryDelay, api.rescanInterval)
+		delay = scan.retryDelay
+	} else {
+		scan.retryDelay = 0
 	}
 	scan.next = time.Now().Add(delay)
 	return err
 }
 
-func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.Time, now time.Time) {
+func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.Time, failures []time.Duration, now time.Time) {
 	for i, api := range targets {
 		if api.paused.Load() {
 			next[i] = now.Add(time.Minute)
@@ -364,8 +371,10 @@ func scanDue(ctx context.Context, targets []*listTarget, db *store, next []time.
 		delay := api.rescanInterval
 		if err := api.backfill(ctx, db); err != nil {
 			slog.Error("PDS backfill failed", "pds", api.pds, "error", err)
-			delay = time.Minute
+			delay = palustre.ScanRetryDelay(failures[i], api.rescanInterval)
+			failures[i] = delay
 		} else {
+			failures[i] = 0
 			slog.Info("PDS backfill queued", "pds", api.pds)
 		}
 		next[i] = time.Now().Add(delay)

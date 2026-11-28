@@ -30,7 +30,7 @@ type Collector struct {
 }
 
 func (c Collector) Run(ctx context.Context) error {
-	delay := time.Second
+	var delay time.Duration
 	for ctx.Err() == nil {
 		started := time.Now()
 		err := c.stream(ctx)
@@ -42,15 +42,12 @@ func (c Collector) Run(ctx context.Context) error {
 				return err
 			}
 		}
+		delay = palustre.StreamRetryDelay(delay, time.Since(started))
 		slog.Warn("Jetstream disconnected", "error", err, "retry_in", delay)
 		if !palustre.Pause(ctx, delay) {
 			return nil
 		}
-		if time.Since(started) > time.Minute {
-			delay = time.Second
-		} else {
-			delay = min(delay*2, time.Minute)
-		}
+
 	}
 	return nil
 }

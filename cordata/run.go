@@ -154,11 +154,16 @@ func scanLikeBacklinks(ctx context.Context, api *palustre.Session, endpoint, pos
 }
 
 func verifyLike(ctx context.Context, api *palustre.Session, row *palustre.Backlink, post string) (bool, error) {
-	doc, err := api.Resolve(ctx, row.Did)
+	doc, cached, err := api.CachedDID(ctx, row.Did)
 	if err != nil {
 		return false, err
 	}
 	record, err := atproto.RepoGetRecord(ctx, &xrpc.Client{Host: doc.PDS, Client: api.HTTP}, "", row.Collection, row.Did, row.Rkey)
+	if cached && palustre.MayHaveMoved(err) {
+		if confirmErr := api.ConfirmPDS(ctx, row.Did, doc.PDS); confirmErr != nil {
+			return false, confirmErr
+		}
+	}
 	if palustre.XRPCCode(err, "RecordNotFound") {
 		return false, nil
 	}
@@ -216,6 +221,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	key := palustre.RecordKey("cordata\n" + post)
 	list := "at://" + api.Client.Auth.Did + "/" + palustre.ListCollection + "/" + key
+	var retryDelay time.Duration
 	for ctx.Err() == nil {
 		err := api.Refresh(ctx)
 		if err == nil {
@@ -228,7 +234,10 @@ func Run(ctx context.Context, cfg Config) error {
 		delay := cfg.RescanInterval
 		if err != nil && ctx.Err() == nil {
 			slog.Error("post sync failed", "error", err)
-			delay = time.Minute
+			retryDelay = palustre.ScanRetryDelay(retryDelay, cfg.RescanInterval)
+			delay = retryDelay
+		} else {
+			retryDelay = 0
 		}
 		if !palustre.Pause(ctx, delay) {
 			break

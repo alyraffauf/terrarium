@@ -175,7 +175,7 @@ func (db *store) finish(ctx context.Context, work job) error {
 	return db.queries.FinishJob(ctx, storage.FinishJobParams{Did: work.DID, Generation: work.Generation})
 }
 func (db *store) retry(ctx context.Context, work job) error {
-	delay := min(time.Hour, time.Second*time.Duration(1<<min(work.Attempts+1, 12)))
+	delay := palustre.MembershipRetryDelay(work.Attempts)
 	return db.queries.RetryJob(ctx, storage.RetryJobParams{Did: work.DID, Generation: work.Generation, Ready: time.Now().Add(delay).Unix()})
 }
 func (db *store) queueScan(ctx context.Context, dids ...string) error {

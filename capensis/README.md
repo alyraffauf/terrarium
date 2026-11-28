@@ -38,7 +38,7 @@ nix run .#capensis -- first.example.com \
 	--list 'first.example.com=at://did:plc:YOUR_DID/app.bsky.graph.list/LIST_KEY'
 ```
 
-The list must belong to the owner, have the managed title and description or the legacy name `Users on <pds hostname>`, and have moderation purpose. Capensis saves a new binding after it verifies or creates the list. Capensis exits if a saved binding points to a different list. If a list check fails, Capensis pauses writes to that list and retries the check after one minute. Other lists keep syncing. A successful check after a pause triggers a new PDS backfill and list-item scan. Capensis recreates deleted lists at the same URI. Removing a PDS from the configuration stops its updates without deleting its list.
+The list must belong to the owner, have the managed title and description or the legacy name `Users on <pds hostname>`, and have moderation purpose. Capensis saves a new binding after it verifies or creates the list. Capensis exits if a saved binding points to a different list. If a list check fails, Capensis pauses writes to that list and retries the check after one minute, doubling on repeated failures up to the scan interval (one-hour maximum, one-minute minimum). Other lists keep syncing. A successful check after a pause triggers a new PDS backfill and list-item scan. Capensis recreates deleted lists at the same URI. Removing a PDS from the configuration stops its updates without deleting its list.
 
 ## Membership updates
 

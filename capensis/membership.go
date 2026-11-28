@@ -16,6 +16,7 @@ const listCollection = palustre.ListCollection
 const itemCollection = palustre.ItemCollection
 
 type listTarget struct {
+	checkRetry time.Duration
 	*session
 	pds            string
 	rescanInterval time.Duration
