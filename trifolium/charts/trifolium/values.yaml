@@ -31,3 +31,4 @@ clusters: {}
 metrics:
   enabled: false
   port: 9090
+verificationWorkers: 16

@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestHostReadsExpireOnFinalRelease(t *testing.T) {
 	var service service
@@ -24,4 +27,18 @@ func TestHostReadsExpireOnFinalRelease(t *testing.T) {
 	if len(service.hostReads) != 0 {
 		t.Fatalf("idle hosts retained: %v", service.hostReads)
 	}
+}
+
+func TestRateLimitAffectsOnlyOneHost(t *testing.T) {
+	var a service
+	a.coolHost("busy", time.Now().Add(time.Hour))
+	a.coolHost("busy", time.Now().Add(-time.Hour))
+	if a.acquireHost("busy") != nil {
+		t.Fatal("accepted read during Retry-After")
+	}
+	release := a.acquireHost("available")
+	if release == nil {
+		t.Fatal("unrelated host blocked")
+	}
+	release()
 }

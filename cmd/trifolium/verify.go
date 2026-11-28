@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/bluesky-social/indigo/api/atproto"
@@ -22,25 +23,41 @@ type verifyJob struct {
 	pds              string
 }
 
-func (a *service) claim(ctx context.Context, preferHint bool) (j verifyJob, err error) {
+type verificationLane int
+
+const (
+	freshLane verificationLane = iota
+	continuationLane
+	hintLane
+)
+
+func workerLane(index int) verificationLane {
+	return [...]verificationLane{continuationLane, freshLane, continuationLane, hintLane}[index%4]
+}
+
+func (a *service) claim(ctx context.Context, lane verificationLane) (j verifyJob, err error) {
 	err = a.transaction(ctx, func(tx *sql.Tx) error {
 		hint := func() error {
 			return tx.QueryRow(`SELECT id,did,rkey,target,attempts FROM hints WHERE due<=unixepoch() AND did NOT IN(SELECT did FROM scanning) ORDER BY due,id LIMIT 1`).Scan(&j.id, &j.did, &j.key, &j.target, &j.attempts)
 		}
-		scan := func() error {
+		owner := func() error {
 			err := tx.QueryRow("SELECT did,version,attempts FROM scans WHERE did=? AND due<=unixepoch() AND did NOT IN (SELECT did FROM scanning)", a.owner).Scan(&j.did, &j.version, &j.attempts)
+			return err
+		}
+		scan := func(continuation bool) error {
+			return tx.QueryRow(`SELECT did,version,attempts FROM scans WHERE continuation=? AND due<=unixepoch() AND did NOT IN(SELECT did FROM scanning) ORDER BY due,rowid LIMIT 1`, continuation).Scan(&j.did, &j.version, &j.attempts)
+		}
+		err := owner()
+		order := [...]verificationLane{lane, (lane + 1) % 3, (lane + 2) % 3}
+		for _, choice := range order {
 			if !errors.Is(err, sql.ErrNoRows) {
-				return err
+				break
 			}
-			return tx.QueryRow(`SELECT did,version,attempts FROM scans WHERE due<=unixepoch() AND did NOT IN(SELECT did FROM scanning) ORDER BY due,rowid LIMIT 1`).Scan(&j.did, &j.version, &j.attempts)
-		}
-		first, second := scan, hint
-		if preferHint {
-			first, second = hint, scan
-		}
-		err := first()
-		if errors.Is(err, sql.ErrNoRows) {
-			err = second()
+			if choice == hintLane {
+				err = hint()
+			} else {
+				err = scan(choice == continuationLane)
+			}
 		}
 		if err != nil {
 			return err
@@ -56,42 +73,52 @@ func (a *service) acquireHost(host string) func() {
 	if a.hostReads == nil {
 		a.hostReads = map[string]int{}
 	}
+	if time.Now().Before(a.cooldowns[host]) {
+		return nil
+	}
+	delete(a.cooldowns, host)
 	if a.hostReads[host] >= 2 {
 		return nil
 	}
+	inflight.Inc()
 	a.hostReads[host]++
 	return func() {
 		a.hostMu.Lock()
 		defer a.hostMu.Unlock()
+		inflight.Dec()
 		a.hostReads[host]--
 		if a.hostReads[host] == 0 {
 			delete(a.hostReads, host)
 		}
 	}
 }
-func (a *service) verify(ctx context.Context, preferHint bool) error {
-	j, err := a.claim(ctx, preferHint)
+func (a *service) verify(ctx context.Context, lane verificationLane) error {
+	j, err := a.claim(ctx, lane)
 	if err != nil {
 		return err
 	}
 	defer a.ExecContext(context.WithoutCancel(ctx), "DELETE FROM scanning WHERE did=?", j.did)
 	doc, cached, err := a.api.CachedDID(ctx, j.did)
 	j.cached = cached
+	busy := false
 	delay := 60
 	if err == nil {
 		if release := a.acquireHost(doc.PDS); release != nil {
 			defer release()
-			client := &xrpc.Client{Host: doc.PDS, Client: a.http}
-			if j.id != 0 {
-				err = a.checkHint(ctx, client, j)
-			} else {
-				err = a.scanPage(ctx, client, j)
-			}
+			client := &xrpc.Client{Host: doc.PDS, Client: palustre.ObserveRateLimits(a.http, func(until time.Time) { a.coolHost(doc.PDS, until) })}
+			err = a.verifyOnPDS(ctx, client, j, doc.FromDIDDocument && !cached)
+
 		} else {
+			busy = true
 			delay = 2
+			a.hostMu.Lock()
+			if wait := time.Until(a.cooldowns[doc.PDS]); wait > 2*time.Second {
+				delay = int(wait/time.Second) + 1
+			}
+			a.hostMu.Unlock()
 		}
 	}
-	if err == nil && delay != 2 {
+	if err == nil && !busy {
 		if j.attempts > 0 {
 			a.api.VerificationRecovered.Add(1)
 		}
@@ -118,6 +145,49 @@ func (a *service) verify(ctx context.Context, preferHint bool) error {
 		slog.Warn("follow verification deferred", "did", j.did, "retry_seconds", delay, "error", err)
 	}
 	return nil
+}
+
+func (a *service) coolHost(host string, until time.Time) {
+	a.hostMu.Lock()
+	if a.cooldowns == nil {
+		a.cooldowns = map[string]time.Time{}
+	}
+	if until.After(a.cooldowns[host]) {
+		a.cooldowns[host] = until
+	}
+	a.hostMu.Unlock()
+	rateLimited.Inc()
+	slog.Warn("PDS verification rate limited", "pds", host, "until", until)
+}
+
+func (a *service) verifyOnPDS(ctx context.Context, c *xrpc.Client, j verifyJob, checkStatus bool) error {
+	if checkStatus {
+		active, err := palustre.RepoActive(ctx, a.api.PDSVerificationClient(c), j.did)
+		if err != nil {
+			return err
+		}
+		if !active {
+			if j.did == a.owner {
+				return fmt.Errorf("owner repository is inactive")
+			}
+			if j.id == 0 {
+				return a.savePage(ctx, j, "", "", nil)
+			}
+			_, err = a.ExecContext(ctx, "DELETE FROM hints WHERE id=?", j.id)
+			if err == nil {
+				verifiedHints.Inc()
+			}
+			return err
+		}
+	}
+	if j.id == 0 {
+		return a.scanPage(ctx, c, j)
+	}
+	err := a.checkHint(ctx, c, j)
+	if err == nil {
+		verifiedHints.Inc()
+	}
+	return err
 }
 
 func (a *service) checkHint(ctx context.Context, c *xrpc.Client, j verifyJob) error {
@@ -194,6 +264,7 @@ func (a *service) scanPage(ctx context.Context, c *xrpc.Client, j verifyJob) err
 }
 
 func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor string, records map[string]string) error {
+	accepted := false
 	completed := false
 	err := a.transaction(ctx, func(tx *sql.Tx) error {
 		var current int64
@@ -221,7 +292,7 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 				if err = clearPages(tx, j.did); err != nil {
 					return err
 				}
-				_, err = tx.Exec("UPDATE scans SET due=unixepoch()+60 WHERE did=?", j.did)
+				_, err = tx.Exec("UPDATE scans SET continuation=0,due=unixepoch()+60 WHERE did=?", j.did)
 				return err
 			}
 		}
@@ -237,8 +308,9 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 			if _, err := tx.Exec("INSERT OR REPLACE INTO pages(did,version,cursor,pds) VALUES(?,?,?,?)", j.did, j.version, nextCursor, j.pds); err != nil {
 				return err
 			}
+			accepted = true
 			// Yield to untouched and overdue candidates, including after a restart.
-			_, err := tx.Exec("UPDATE scans SET attempts=0,due=unixepoch() WHERE did=?", j.did)
+			_, err := tx.Exec("UPDATE scans SET continuation=1,queued=unixepoch(),attempts=0,due=unixepoch() WHERE did=?", j.did)
 			return err
 		}
 		if _, err := tx.Exec("DELETE FROM edges WHERE actor=? AND target NOT IN (SELECT target FROM partial_targets WHERE did=?)", j.did, j.did); err != nil {
@@ -257,6 +329,9 @@ func (a *service) savePage(ctx context.Context, j verifyJob, cursor, nextCursor 
 		completed = err == nil
 		return err
 	})
+	if err == nil && (accepted || completed) {
+		pagesCommitted.Inc()
+	}
 	if err == nil && completed {
 		a.api.FollowInventoriesCompleted.Add(1)
 	}

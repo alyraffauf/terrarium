@@ -22,9 +22,9 @@ func FuzzPagedVerification(f *testing.F) {
 		for i, b := range trace[:min(len(trace), 24)] {
 			execute(t, a, "INSERT OR IGNORE INTO scans(did) VALUES(?)", actor)
 			execute(t, a, "UPDATE scans SET due=0")
-			job, err := a.claim(t.Context(), false)
+			job, err := a.claim(t.Context(), freshLane)
 			requireOK(t, err)
-			if _, err := a.claim(t.Context(), true); !errors.Is(err, sql.ErrNoRows) {
+			if _, err := a.claim(t.Context(), hintLane); !errors.Is(err, sql.ErrNoRows) {
 				t.Fatal("concurrent claim", err)
 			}
 			key := fmt.Sprint(b % 4)
@@ -126,7 +126,7 @@ func FuzzHintInvalidation(f *testing.F) {
 		target := targets[int(b)%3]
 		key := fmt.Sprintf("key%d", b)
 		execute(t, a, "INSERT INTO hints(did,rkey,target) VALUES(?,?,?)", actor, key, target)
-		j, err := a.claim(t.Context(), true)
+		j, err := a.claim(t.Context(), hintLane)
 		requireOK(t, err)
 		connect(a, func(*http.Request) (*http.Response, error) {
 			if b&1 != 0 {
@@ -199,7 +199,7 @@ func FuzzResumeVerification(f *testing.F) {
 		if err := change(); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("premature change %s %v", member, err)
 		}
-		job, err := a.claim(t.Context(), false)
+		job, err := a.claim(t.Context(), freshLane)
 		requireOK(t, err)
 		if job.did != did {
 			t.Fatal(job)
@@ -248,7 +248,7 @@ func TestOwnerInventorySkipsMalformedFollowValues(t *testing.T) {
 	a := openStore(t, ":memory:")
 	configure(t, a)
 	execute(t, a, dirty, owner)
-	job, err := a.claim(t.Context(), false)
+	job, err := a.claim(t.Context(), freshLane)
 	requireOK(t, err)
 	connect(a, func(*http.Request) (*http.Response, error) {
 		return reply(200, fmt.Sprintf(`{"records":[
@@ -286,7 +286,7 @@ func TestUnavailableFollowInventory(t *testing.T) {
 			a := openStore(t, ":memory:")
 			configure(t, a)
 			execute(t, a, dirty, tc.did)
-			job, err := a.claim(t.Context(), false)
+			job, err := a.claim(t.Context(), freshLane)
 			requireOK(t, err)
 			requireOK(t, a.savePage(t.Context(), job, "", "more", map[string]string{"old": targets[0]}))
 			connect(a, func(r *http.Request) (*http.Response, error) {
@@ -330,7 +330,7 @@ func TestFailedVerificationReleasesWorkerAndPersistsBackoff(t *testing.T) {
 	for _, did := range []string{actor, a.owner} {
 		execute(t, a, "INSERT INTO scans(did) VALUES(?)", did)
 		for i := range 8 {
-			requireOK(t, a.verify(t.Context(), false))
+			requireOK(t, a.verify(t.Context(), freshLane))
 			var attempts, delay, claimed int
 			requireOK(t, a.QueryRow("SELECT attempts,due-unixepoch(),(SELECT count(*) FROM scanning) FROM scans WHERE did=?", did).Scan(&attempts, &delay, &claimed))
 			want := min(3600, 60<<i)
@@ -343,5 +343,20 @@ func TestFailedVerificationReleasesWorkerAndPersistsBackoff(t *testing.T) {
 			execute(t, a, "UPDATE scans SET due=0 WHERE did=?", did)
 		}
 		execute(t, a, "DELETE FROM scans WHERE did=?", did)
+	}
+}
+
+func TestClaimReservesLanesAndPrioritizesOwner(t *testing.T) {
+	a := openStore(t, ":memory:")
+	execute(t, a, "INSERT INTO scans(did,continuation) VALUES('old',1),('new',0),(?,0)", a.owner)
+	execute(t, a, "INSERT INTO hints(did,rkey,target) VALUES('hint','key','target')")
+	for _, tc := range []struct {
+		lane verificationLane
+		want string
+	}{{hintLane, a.owner}, {continuationLane, "old"}, {hintLane, "hint"}, {continuationLane, "new"}} {
+		j, err := a.claim(t.Context(), tc.lane)
+		if err != nil || j.did != tc.want {
+			t.Fatalf("lane %d got %q, %v; want %s", tc.lane, j.did, err, tc.want)
+		}
 	}
 }

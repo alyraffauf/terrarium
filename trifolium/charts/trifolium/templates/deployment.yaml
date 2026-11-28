@@ -91,6 +91,7 @@ spec:
             - {{ printf "--slingshot=%v" .Values.slingshot | quote }}
             - {{ printf "--jetstream=%v" .Values.jetstream | quote }}
             - {{ printf "--write-interval=%s" (regexReplaceAll "^([0-9]+)$" (toString .Values.writeInterval) "${1}s") | quote }}
+            - {{ printf "--verification-workers=%v" .Values.verificationWorkers | quote }}
             - {{ printf "--rescan-interval=%s" (regexReplaceAll "^([0-9]+)$" (toString .Values.rescanInterval) "${1}s") | quote }}
             {{- with .Values.clusters }}
             - {{ printf "--clusters=%s" (mustToJson .) | quote }}

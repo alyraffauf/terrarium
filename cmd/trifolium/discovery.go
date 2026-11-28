@@ -20,6 +20,7 @@ type service struct {
 
 	hostMu    sync.Mutex
 	hostReads map[string]int
+	cooldowns map[string]time.Time
 	store
 	api                          *palustre.Session
 	owner, stream, constellation string

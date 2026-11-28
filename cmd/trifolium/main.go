@@ -122,7 +122,11 @@ func run(ctx context.Context) error {
 	pace := flag.Duration("write-interval", palustre.DefaultFollowerWriteInterval, "minimum interval between list writes")
 	healthAddress := flag.String("health-address", "", "HTTP listen address for /readyz and /livez (disabled by default)")
 	metrics := flag.String("metrics-address", "", "Prometheus listen address, such as :9090 (disabled by default)")
+	workers := flag.Int("verification-workers", 16, "concurrent PDS verification workers")
 	flag.Parse()
+	if *workers < 1 {
+		return errors.New("verification-workers must be positive")
+	}
 	password := os.Getenv("TRIFOLIUM_APP_PASSWORD")
 	if *threshold < 1 || *interval <= 0 || *pace <= 0 || *identifier == "" || password == "" {
 		return errors.New("set identifier and TRIFOLIUM_APP_PASSWORD and use positive threshold and intervals")
@@ -168,7 +172,7 @@ func run(ctx context.Context) error {
 	if err = storage.Migrate(ctx, db); err != nil {
 		return err
 	}
-	stopMetrics, err := api.StartMetrics(*metrics, nil)
+	stopMetrics, err := api.StartMetricsWithCollectors(*metrics, nil, verificationCollectors(), queueAges(db)...)
 	if err != nil {
 		return err
 	}
@@ -197,11 +201,11 @@ func run(ctx context.Context) error {
 	wg.Go(func() { followers.PollBlocks(ctx, refreshBlocks) })
 	wg.Go(func() { a.listen(ctx) })
 	wg.Go(func() { a.backfill(ctx) })
-	for i := range 4 {
+	for i := range *workers {
 		wg.Go(func() {
 			ctx, done := health.Worker(ctx)
 			defer done()
-			work(ctx, "follow verification", func(ctx context.Context) error { return a.verify(ctx, i != 0) })
+			work(ctx, "follow verification", func(ctx context.Context) error { return a.verify(ctx, workerLane(i)) })
 		})
 	}
 	wg.Go(func() {

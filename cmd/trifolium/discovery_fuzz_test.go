@@ -110,9 +110,9 @@ func FuzzIndexCandidatesAgainstRepos(f *testing.F) {
 		}
 		jobs := len(followers) + len(links)
 		for i := 0; i < jobs; i++ {
-			requireOK(t, a.verify(t.Context(), i%2 == 0))
+			requireOK(t, a.verify(t.Context(), workerLane(i)))
 		}
-		if err := a.verify(t.Context(), true); !errors.Is(err, sql.ErrNoRows) {
+		if err := a.verify(t.Context(), hintLane); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("queue not drained: %v", err)
 		}
 		if got := pairs(t, a, "SELECT actor,target FROM edges"); !maps.Equal(got, want) {

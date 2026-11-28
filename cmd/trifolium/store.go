@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 type store struct{ *sql.DB }
 
 func (s store) transaction(ctx context.Context, fn func(*sql.Tx) error) error {
+	start := time.Now()
+	defer func() { txSeconds.Observe(time.Since(start).Seconds()) }()
 	tx, err := s.BeginTx(ctx, nil)
 	if err != nil {
 		return err

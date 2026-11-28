@@ -17,6 +17,10 @@ import (
 // StartMetrics serves an isolated registry without involving the membership worker.
 // An empty address disables the listener. The caller closes it before its database.
 func (api *Session) StartMetrics(address string, pending func(context.Context) (int64, error), gauges ...QueueGauge) (func(), error) {
+	return api.StartMetricsWithCollectors(address, pending, nil, gauges...)
+}
+
+func (api *Session) StartMetricsWithCollectors(address string, pending func(context.Context) (int64, error), collectors []prometheus.Collector, gauges ...QueueGauge) (func(), error) {
 	if address == "" {
 		return func() {}, nil
 	}
@@ -25,7 +29,7 @@ func (api *Session) StartMetrics(address string, pending func(context.Context) (
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", api.metricsHandler(pending, gauges...))
+	mux.Handle("/metrics", api.metricsHandlerExtra(pending, collectors, gauges...))
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
 	go func() {
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -37,7 +41,11 @@ func (api *Session) StartMetrics(address string, pending func(context.Context) (
 }
 
 func (api *Session) metricsHandler(pending func(context.Context) (int64, error), gauges ...QueueGauge) http.Handler {
+	return api.metricsHandlerExtra(pending, nil, gauges...)
+}
+func (api *Session) metricsHandlerExtra(pending func(context.Context) (int64, error), collectors []prometheus.Collector, gauges ...QueueGauge) http.Handler {
 	registry := prometheus.NewRegistry()
+	registry.MustRegister(collectors...)
 	latency := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "terrarium_pds_verification_read_duration_seconds",
 		Help:    "Elapsed seconds per verification XRPC read, including response decoding and errors.",

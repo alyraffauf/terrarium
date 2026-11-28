@@ -52,7 +52,7 @@ If you supply only named clusters when upgrading a single-list database, the fir
 
 ## Discovery and reconciliation
 
-Bluesky and Constellation supply follower candidates. Trifolium checks follow records directly on each account's PDS. Constellation backlinks include record keys, which allow workers to check individual records. Four workers share the verification queue, with up to two concurrent reads per PDS.
+Bluesky and Constellation supply follower candidates. Trifolium checks follow records directly on each account's PDS. Constellation backlinks include record keys, which allow workers to check individual records. By default 16 workers verify follows, with two concurrent reads per PDS. Set `--verification-workers` or the Helm value `verificationWorkers` to change the total. Half prefer continuation pages, a quarter prefer fresh inventories, and a quarter prefer record hints. Workers borrow ready jobs from other queues and prioritize the owner inventory.
 
 Full inventories save their cursor in SQLite after each page. Confirmed follows count immediately. An inventory removes missing follows only after its final page succeeds. Discovery runs every 24 hours by default. Discovery reads one page at a time and rotates across targets and sources. SQLite stores the next cursor and deadline for each pair, so a restart resumes the crawl. To change the interval, set `--rescan-interval` or the Helm value `rescanInterval`.
 
@@ -80,8 +80,10 @@ The [chart values](charts/trifolium/values.yaml) cover cluster settings, endpoin
 
 Set `--constellation` or the Helm value `constellation` to override the backlink endpoint.
 
-Verification workers reuse successful Slingshot DID lookups for up to five minutes. Each daemon process caches at most 8,192 identities. A failed verification job retries after one minute, doubling on consecutive failures up to one hour. Owner inventory failures retry every minute because a pending owner scan pauses additions. Reaching the two-read limit for a PDS defers that job for two seconds without counting it as a failure.
+If Slingshot cannot resolve a handle, verification uses the DID document’s PDS endpoint. A PDS returning HTTP 429 is paused for its Retry-After interval, or one minute by default. Verification workers reuse successful Slingshot DID lookups for up to five minutes. Each daemon process caches at most 8,192 identities. A failed verification job retries after one minute, doubling on consecutive failures up to one hour. Owner inventory failures retry every minute because a pending owner scan pauses additions. Reaching the two-read limit for a PDS defers that job for two seconds without counting it as a failure.
 
 ## Metrics
 
 Set `--metrics-address=:9090` to expose Prometheus metrics at `/metrics`. The listener is disabled by default. `terrarium_verification_deferred_total` counts failed follow record or inventory page verification attempts scheduled for retry. `terrarium_verification_recovered_total` counts successful retries. `terrarium_members_added_total` and `terrarium_members_removed_total` count successful list-item writes across all managed lists. All four counters reset on restart.
+
+Use `rate(terrarium_verification_pages_total[5m])*60` and `rate(terrarium_follow_inventories_completed_total[5m])*60` to compare pages and completed inventories per minute. The verifier also exports resolved hints, active PDS reads, PDS 429 responses, oldest ready job age for each lane, and a histogram of SQLite transaction duration including connection wait time. Queue age for jobs carried over during upgrade starts at migration time.
