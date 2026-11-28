@@ -100,6 +100,23 @@ func completeCheck(ctx context.Context, targets []*listTarget, db *store, result
 		return err
 	}
 	err := result.err
+	if err != nil {
+		// A known outgoing block suffices to remove an existing item even when
+		// the follower's PDS is unavailable. Retry the other targets as usual.
+		for _, target := range targets {
+			if target.suspended.Load() {
+				continue
+			}
+			blocked, checkErr := db.queries.BlocksWatchedAccount(ctx, storage.BlocksWatchedAccountParams{Target: target.actor, Actor: result.work.DID})
+			if checkErr != nil {
+				return checkErr
+			}
+			if blocked {
+				state := subjectState{did: result.work.DID, excluded: true, beforeWrite: func(ctx context.Context) error { return checkGeneration(ctx, db, result.work) }}
+				err = errors.Join(err, target.reconcileSubject(ctx, state, db))
+			}
+		}
+	}
 	if err == nil {
 		// A follow event may have arrived while a candidate's public reads ran.
 		// Never apply a stale exclusion snapshot to prefetched work.

@@ -4,6 +4,8 @@ Helix maintains a Bluesky moderation list for each watched account. Each list ha
 
 Helix uses the target account's profile picture as the list icon. Icons refresh at startup and every `--rescan-interval`. Missing or unsupported images leave the existing icon unchanged. Profile-picture URLs and redirects must resolve to public addresses. Icon requests bypass HTTP proxies.
 
+A direct block by a follower against a watched account excludes that follow. Helix removes existing members from that account’s list and rechecks eligibility after an unblock. Both changes use the configured Constellation index at startup and on a five-minute polling interval. An incomplete scan preserves the last complete snapshot for that target.
+
 ## Run
 
 You need Nix and an app password for the list owner. Run these commands from the repository root in Bash.

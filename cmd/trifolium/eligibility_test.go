@@ -20,6 +20,8 @@ func FuzzPublishEligibility(f *testing.F) {
 	f.Add(byte(1), byte(1|16), byte(0), false)  // newly followed by owner
 	f.Add(byte(1), byte(1|32), byte(0), false)  // owner inventory starts during add
 	f.Add(byte(3), byte(3), byte(0), true)      // owner cannot join
+	f.Add(byte(3), byte(67), byte(1), false)    // block during add
+	f.Add(byte(67), byte(3), byte(1), false)    // unblock during removal
 	f.Fuzz(func(t *testing.T, before, after, thresholdByte byte, self bool) {
 		a := openStore(t, ":memory:")
 		c := configure(t, a)[0] // garden watches targets[0] and targets[1]
@@ -32,7 +34,12 @@ func FuzzPublishEligibility(f *testing.F) {
 		// Bits 0–2 add follows. Target 2 is watched by another cluster.
 		// Bit 3 adds a second record for target 0. Bits 4 and 5 change the owner.
 		setState := func(state byte) {
-			execute(t, a, "DELETE FROM edges; DELETE FROM scans")
+			execute(t, a, "DELETE FROM edges; DELETE FROM scans; DELETE FROM follower_blocks")
+			for i := 0; i < 2; i++ {
+				if state&(64<<i) != 0 {
+					execute(t, a, "INSERT INTO follower_blocks VALUES(?,?)", targets[i], did)
+				}
+			}
 			for i, target := range targets {
 				if state&(1<<i) != 0 {
 					execute(t, a, "INSERT INTO edges VALUES(?,?,?)", did, fmt.Sprint(i), target)
@@ -53,6 +60,7 @@ func FuzzPublishEligibility(f *testing.F) {
 			if state&8 != 0 {
 				distinct |= 1
 			}
+			distinct &^= state >> 6
 			return !self && state&16 == 0 && bits.OnesCount8(distinct) >= c.threshold
 		}
 

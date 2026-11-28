@@ -41,6 +41,22 @@ func (q *Queries) BindList(ctx context.Context, arg BindListParams) error {
 	return err
 }
 
+const blocksWatchedAccount = `-- name: BlocksWatchedAccount :one
+SELECT EXISTS(SELECT 1 FROM follower_blocks WHERE target=?1 AND actor=?2)
+`
+
+type BlocksWatchedAccountParams struct {
+	Target string
+	Actor  string
+}
+
+func (q *Queries) BlocksWatchedAccount(ctx context.Context, arg BlocksWatchedAccountParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, blocksWatchedAccount, arg.Target, arg.Actor)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const candidatePDS = `-- name: CandidatePDS :one
 SELECT pds FROM candidates WHERE did=?
 `

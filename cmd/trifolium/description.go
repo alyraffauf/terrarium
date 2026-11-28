@@ -15,7 +15,7 @@ import (
 
 const oldDescription = "Accounts meeting the configured follower crossover threshold."
 const ranking = `
- WITH follows AS (SELECT DISTINCT actor,target FROM edges JOIN cluster_targets USING(target) WHERE cluster=?),
+ WITH follows AS (SELECT DISTINCT actor,target FROM qualifying_follows JOIN cluster_targets USING(target) WHERE cluster=?),
  shared AS (SELECT actor FROM follows GROUP BY actor HAVING count(*)>1)
  SELECT target FROM follows JOIN shared USING(actor)
  GROUP BY target ORDER BY count(*) DESC,target LIMIT 3`

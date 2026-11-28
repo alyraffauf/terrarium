@@ -2,18 +2,22 @@ package helix
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/bluesky-social/indigo/atproto/syntax"
-	"github.com/gofrs/flock"
-
+	"github.com/alyraffauf/terrarium/helix/storage"
 	"github.com/alyraffauf/terrarium/internal/followers"
 	"github.com/alyraffauf/terrarium/palustre"
+	"github.com/bluesky-social/indigo/atproto/syntax"
+	"github.com/bluesky-social/indigo/xrpc"
+	"github.com/gofrs/flock"
 )
 
 func Run(ctx context.Context, cfg Config) (result error) {
@@ -77,6 +81,15 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	for _, target := range targets {
 		watched[target.actor] = true
 	}
+	actors := slices.Sorted(maps.Keys(watched))
+	refreshBlocks := func(ctx context.Context) {
+		followers.RefreshBlocks(ctx, db.conn, &xrpc.Client{Host: cfg.Constellation, Client: api.HTTP}, actors, func(ctx context.Context, tx *sql.Tx, actor string) error {
+			q := storage.New(tx)
+			return q.EnqueueEvent(ctx, actor)
+		})
+	}
+	refreshBlocks(ctx)
+	workers.Go(func() { followers.PollBlocks(ctx, refreshBlocks) })
 	collectorError := make(chan error, 1)
 	go func() {
 		defer workers.Done()

@@ -8,11 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bluesky-social/indigo/api/bsky"
-	"github.com/bluesky-social/indigo/xrpc"
-
 	"github.com/alyraffauf/terrarium/helix/storage"
 	"github.com/alyraffauf/terrarium/palustre"
+	"github.com/bluesky-social/indigo/api/bsky"
+	"github.com/bluesky-social/indigo/xrpc"
 )
 
 const listCollection = palustre.ListCollection
@@ -98,5 +97,12 @@ func (api *listTarget) reconcileSubject(ctx context.Context, subject subjectStat
 	}
 	belongs := !subject.excluded && subject.follows[api.actor]
 
+	if belongs {
+		blocked, err := db.queries.BlocksWatchedAccount(ctx, storage.BlocksWatchedAccountParams{Target: api.actor, Actor: subject.did})
+		if err != nil {
+			return err
+		}
+		belongs = !blocked
+	}
 	return api.Reconcile(ctx, db, palustre.Membership{Target: api.actor, ListURI: api.listURI, DID: subject.did, Include: belongs, BeforeWrite: subject.beforeWrite})
 }

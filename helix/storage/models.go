@@ -13,6 +13,11 @@ type Follow struct {
 	Did string
 }
 
+type FollowerBlock struct {
+	Target string
+	Actor  string
+}
+
 type ListMember struct {
 	Actor string
 	Did   string

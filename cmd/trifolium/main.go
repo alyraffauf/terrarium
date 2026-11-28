@@ -7,19 +7,23 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/signal"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/alyraffauf/terrarium/internal/followers"
 	"github.com/alyraffauf/terrarium/palustre"
 	"github.com/alyraffauf/terrarium/trifolium/storage"
+	"github.com/bluesky-social/indigo/xrpc"
 	"github.com/gofrs/flock"
 )
 
 const nextChange = `
- WITH eligible AS (SELECT actor AS did FROM edges JOIN cluster_targets USING(target)
+ WITH eligible AS (SELECT actor AS did FROM qualifying_follows JOIN cluster_targets USING(target)
  WHERE cluster=?1 AND actor<>?3 AND actor NOT IN (SELECT target FROM edges WHERE actor=?3)
  GROUP BY actor HAVING count(DISTINCT target)>=?2),
  changes AS (
@@ -49,7 +53,7 @@ func (a *cluster) publish(ctx context.Context) error {
 		var eligible, ownerScanning bool
 		err := a.QueryRowContext(ctx, `SELECT ?1<>?2
 		AND NOT EXISTS(SELECT 1 FROM edges WHERE actor=?2 AND target=?1)
-		AND (SELECT count(DISTINCT e.target) FROM edges e JOIN cluster_targets c USING(target)
+		AND (SELECT count(DISTINCT e.target) FROM qualifying_follows e JOIN cluster_targets c USING(target)
 		     WHERE c.cluster=?3 AND e.actor=?1)>=?4,
 		    EXISTS(SELECT 1 FROM scans WHERE did=?2)`, did, a.owner, a.id, a.threshold).Scan(&eligible, &ownerScanning)
 		if err != nil {
@@ -184,7 +188,13 @@ func run(ctx context.Context) error {
 	for _, list := range lists {
 		slog.Info("maintaining moderation list", "cluster", list.id, "list", list.list, "threshold", list.threshold)
 	}
+	targets := slices.Sorted(maps.Keys(a.targets))
+	refreshBlocks := func(ctx context.Context) {
+		followers.RefreshBlocks(ctx, db, &xrpc.Client{Host: index, Client: client}, targets, nil)
+	}
+	refreshBlocks(ctx)
 	var wg sync.WaitGroup
+	wg.Go(func() { followers.PollBlocks(ctx, refreshBlocks) })
 	wg.Go(func() { a.listen(ctx) })
 	wg.Go(func() { a.backfill(ctx) })
 	for i := range 4 {

@@ -2,6 +2,8 @@
 
 Trifolium maintains one Bluesky moderation list per cluster. To qualify for a list, an account must follow at least the configured number of distinct accounts in that cluster. Trifolium excludes the list owner and accounts the owner follows.
 
+A direct block by a follower against a watched account excludes that follow. Trifolium excludes the blocked target from the follower’s overlap count and removes existing members who fall below their cluster’s threshold. Both changes use the configured Constellation index at startup and on a five-minute polling interval. An incomplete scan preserves the last complete snapshot for that target.
+
 ## Run one cluster
 
 Set `TRIFOLIUM_IDENTIFIER` and `TRIFOLIUM_APP_PASSWORD` for the list owner. Run Trifolium from the repository root.

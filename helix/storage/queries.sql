@@ -106,3 +106,6 @@ SELECT hint_target, hint_rkey FROM pending WHERE did=?;
 
 -- name: CurrentJob :one
 SELECT EXISTS(SELECT 1 FROM pending WHERE did=? AND generation=?);
+
+-- name: BlocksWatchedAccount :one
+SELECT EXISTS(SELECT 1 FROM follower_blocks WHERE target=sqlc.arg(target) AND actor=sqlc.arg(actor));

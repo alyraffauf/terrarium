@@ -386,3 +386,44 @@ func TestReadPoolRefillsWhileOneCandidateStalls(t *testing.T) {
 		t.Fatal("lost stalled reader")
 	}
 }
+
+func TestExistingFollowerBlockAndUnblock(t *testing.T) {
+	db, err := openStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := t.Context()
+	if err := db.ApplyFollowSnapshot(ctx, 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	world := &m.World{Active: true, Follows: 3}
+	client := &http.Client{Transport: world}
+	api := newSession(Config{WriteInterval: time.Nanosecond, Slingshot: "https://resolver.example"}, client, &xrpc.Client{Host: "https://owner.example", Client: client, Auth: &xrpc.AuthInfo{Did: m.Owner}})
+	targets := []*listTarget{{session: api, actor: m.Actors[0], listURI: m.List(0)}, {session: api, actor: m.Actors[1], listURI: m.List(1)}}
+	check := func(want int) {
+		t.Helper()
+		if err := db.queueScan(ctx, m.Subject); err != nil {
+			t.Fatal(err)
+		}
+		work, err := db.next(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := processBatch(ctx, targets, []job{work}, db); err != nil {
+			t.Fatal(err)
+		}
+		if got := world.RecordCount(); got != want {
+			t.Fatalf("got %d list items, want %d", got, want)
+		}
+	}
+	check(2)
+	if _, err := db.conn.Exec("INSERT INTO follower_blocks(target,actor) VALUES(?,?)", m.Actors[0], m.Subject); err != nil {
+		t.Fatal(err)
+	}
+	check(1)
+	if _, err := db.conn.Exec("DELETE FROM follower_blocks"); err != nil {
+		t.Fatal(err)
+	}
+	check(2)
+}
