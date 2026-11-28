@@ -36,7 +36,10 @@ func Run(ctx context.Context, cfg Config) (result error) {
 	}
 	defer db.Close()
 	api := newSession(cfg, &http.Client{Timeout: 30 * time.Second}, nil)
-	closeMetrics, err := api.StartMetrics(cfg.MetricsAddress, db.queries.PendingCount)
+	closeMetrics, err := api.StartMetrics(cfg.MetricsAddress, db.queries.PendingCount,
+		palustre.QueueGauge{Name: "terrarium_oldest_ready_job_age_seconds", Help: "Seconds the oldest eligible pending job has been ready, or zero if none are ready.", Read: db.queries.OldestReadyAgeSeconds},
+		palustre.QueueGauge{Name: "terrarium_unique_accounts_completed_last_minute", Help: "Distinct accounts whose current Helix queue generation finished in the last 60 seconds.", Read: func(context.Context) (int64, error) { return db.completions.count(time.Now()), nil }},
+	)
 	if err != nil {
 		return fmt.Errorf("start metrics: %w", err)
 	}

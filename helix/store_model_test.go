@@ -33,11 +33,11 @@ func FuzzDurableState(f *testing.F) {
 				if err := db.retry(ctx, job(j)); err != nil {
 					return err
 				}
-				_, err := db.conn.Exec("UPDATE pending SET ready=253402300799 WHERE did=? AND generation=? AND ready>?", j.DID, j.Generation, start)
+				_, err := db.conn.Exec("UPDATE pending SET ready=253402300799,ready_since=253402300799 WHERE did=? AND generation=? AND ready>?", j.DID, j.Generation, start)
 				return err
 			},
 			Elapse: func() error {
-				_, err := db.conn.Exec("UPDATE pending SET ready=unixepoch() WHERE ready=253402300799")
+				_, err := db.conn.Exec("UPDATE pending SET ready=unixepoch(),ready_since=unixepoch() WHERE ready=253402300799")
 				return err
 			},
 			Snapshot: func(v int64, m map[string]bool) error { return db.ApplyFollowSnapshot(ctx, v, m) },

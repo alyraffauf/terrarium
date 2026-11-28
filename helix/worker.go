@@ -101,14 +101,19 @@ func logProgress(ctx context.Context, api *session, db *store) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			unique := db.completions.count(time.Now())
 			pending, err := db.queries.PendingCount(ctx)
+			var age int64
+			if err == nil {
+				age, err = db.queries.OldestReadyAgeSeconds(ctx)
+			}
 			if err != nil {
 				if ctx.Err() == nil {
 					slog.Warn("progress query failed", "error", err)
 				}
 				continue
 			}
-			slog.Info("membership progress", "pending", pending, "completed", api.ChecksCompleted.Load(), "added", api.MembersAdded.Load(), "removed", api.MembersRemoved.Load(), "retries", api.CheckRetries.Load())
+			slog.Info("membership progress", "pending", pending, "oldest_ready_age_seconds", age, "unique_completed_last_minute", unique, "completed", api.ChecksCompleted.Load(), "added", api.MembersAdded.Load(), "removed", api.MembersRemoved.Load(), "retries", api.CheckRetries.Load())
 		}
 	}
 }

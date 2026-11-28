@@ -27,17 +27,17 @@ INSERT INTO targets(actor,list_uri) VALUES(?,?) ON CONFLICT(actor) DO NOTHING;
 -- name: GetListTarget :one
 SELECT actor FROM targets WHERE list_uri=?;
 -- name: EnqueueEvent :exec
-INSERT INTO pending(did,ready) VALUES(?,0) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0;
+INSERT INTO pending(did,ready,ready_since) VALUES(?,0,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since);
 -- name: QueueScan :exec
-INSERT INTO pending(did,ready) VALUES(?,unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1;
+INSERT INTO pending(did,ready,ready_since) VALUES(?,unixepoch(),unixepoch()) ON CONFLICT(did) DO UPDATE SET generation=generation+1;
 -- name: QueueMembers :exec
-INSERT INTO pending(did,ready) SELECT DISTINCT did,unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1;
+INSERT INTO pending(did,ready,ready_since) SELECT DISTINCT did,unixepoch(),unixepoch() FROM list_members WHERE actor=? ON CONFLICT(did) DO UPDATE SET generation=generation+1;
 -- name: NextJob :one
 SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 1;
--- name: FinishJob :exec
+-- name: FinishJob :execrows
 DELETE FROM pending WHERE did=? AND generation=?;
 -- name: RetryJob :exec
-UPDATE pending SET attempts=attempts+1,ready=? WHERE did=? AND generation=?;
+UPDATE pending SET attempts=attempts+1,ready=sqlc.arg(ready),ready_since=sqlc.arg(ready) WHERE did=sqlc.arg(did) AND generation=sqlc.arg(generation);
 -- name: MemberKeys :many
 SELECT rkey FROM list_members WHERE actor=? AND did=? ORDER BY rkey;
 -- name: RememberMember :exec
@@ -51,10 +51,10 @@ DELETE FROM new_follows;
 -- name: AddNewFollow :exec
 INSERT INTO new_follows(did) VALUES(?);
 -- name: QueueFollowChanges :exec
-INSERT INTO pending(did)
-SELECT did FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)
-UNION SELECT did FROM (SELECT did FROM new_follows EXCEPT SELECT did FROM follows) WHERE true
-ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0;
+INSERT INTO pending(did,ready_since)
+SELECT did,unixepoch() FROM (SELECT did FROM follows EXCEPT SELECT did FROM new_follows)
+UNION SELECT did,unixepoch() FROM (SELECT did FROM new_follows EXCEPT SELECT did FROM follows) WHERE true
+ON CONFLICT(did) DO UPDATE SET generation=generation+1,ready=0,attempts=0,ready_since=min(pending.ready_since,excluded.ready_since);
 -- name: ClearFollows :exec
 DELETE FROM follows;
 -- name: ReplaceFollows :exec
@@ -76,3 +76,7 @@ INSERT INTO metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value
 SELECT did,generation,attempts FROM pending WHERE ready<=? ORDER BY ready,did LIMIT 8;
 -- name: PendingCount :one
 SELECT COUNT(*) FROM pending;
+
+-- name: OldestReadyAgeSeconds :one
+SELECT CAST(COALESCE(unixepoch()-MIN(ready_since),0) AS INTEGER)
+FROM pending WHERE ready_since<=unixepoch();

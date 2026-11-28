@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"testing"
+	"time"
 
 	"github.com/alyraffauf/terrarium/helix/storage"
 	"github.com/alyraffauf/terrarium/palustre"
@@ -36,6 +37,10 @@ func FuzzTypedUpgrade(f *testing.F) {
 				t.Fatal(err)
 			}
 		}
+		upgradedAfter := time.Now().Unix()
+		if _, err = legacy.Exec("INSERT INTO pending(did,ready) VALUES ('priority',0),('backfill',1700000000),('delayed',253402300799)"); err != nil {
+			t.Fatal(err)
+		}
 		if err = legacy.Close(); err != nil {
 			t.Fatal(err)
 		}
@@ -43,6 +48,14 @@ func FuzzTypedUpgrade(f *testing.F) {
 			db, err := openStore(path)
 			if err != nil {
 				t.Fatal(err)
+			}
+			var keepPriority, keepBackfill, keepDelay bool
+			err = db.conn.QueryRow(`SELECT
+				EXISTS(SELECT 1 FROM pending WHERE did='priority' AND ready=0 AND ready_since BETWEEN ? AND unixepoch()),
+				EXISTS(SELECT 1 FROM pending WHERE did='backfill' AND ready_since=ready AND ready=1700000000),
+				EXISTS(SELECT 1 FROM pending WHERE did='delayed' AND ready_since=ready AND ready=253402300799)`, upgradedAfter).Scan(&keepPriority, &keepBackfill, &keepDelay)
+			if err != nil || !keepPriority || !keepBackfill || !keepDelay {
+				t.Fatalf("queue age migration: priority=%t backfill=%t delayed=%t err=%v", keepPriority, keepBackfill, keepDelay, err)
 			}
 			for i := range int(n%5) + 1 {
 				host, err := db.candidatePDS(t.Context(), fmt.Sprint(i))
