@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	"image/png"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/netip"
@@ -174,6 +176,9 @@ func (api *Session) fetchIconBytes(ctx context.Context, endpoint string, limit i
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusNotFound {
+			return nil, nil, fmt.Errorf("icon fetch returned HTTP 404: %w", fs.ErrNotExist)
+		}
 		return nil, nil, fmt.Errorf("icon fetch returned HTTP %d", response.StatusCode)
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
@@ -383,7 +388,9 @@ func (api *Session) Favicon(ctx context.Context, pds string) ([]byte, error) {
 		if fetchErr == nil {
 			return data, nil
 		}
-		err = fetchErr
+		if err == nil || errors.Is(err, fs.ErrNotExist) || !errors.Is(fetchErr, fs.ErrNotExist) {
+			err = fetchErr
+		}
 		if ctx.Err() != nil {
 			break
 		}

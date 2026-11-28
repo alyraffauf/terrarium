@@ -2,6 +2,8 @@ package capensis
 
 import (
 	"context"
+	"errors"
+	"io/fs"
 
 	"log/slog"
 	"sync/atomic"
@@ -47,6 +49,9 @@ func (api *listTarget) refreshListIcon(ctx context.Context) {
 	iconCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	icon, err := api.Favicon(iconCtx, api.pds)
+	if errors.Is(err, fs.ErrNotExist) {
+		return
+	}
 	if err == nil {
 		err = api.UpdateListIcon(iconCtx, api.listURI, palustre.ListTitle(api.listURI), icon)
 	}
