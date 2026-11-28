@@ -42,6 +42,9 @@ func (api *Session) RefreshDID(ctx context.Context, did string) (MiniDoc, error)
 	cache := api.identities.lru()
 	cache.Remove(did)
 	doc, err := api.Resolve(ctx, did)
+	if err != nil {
+		doc, err = verificationRoute(ctx, did, err, &documentResolver)
+	}
 	if err == nil {
 		cache.Add(did, cachedIdentity{doc, time.Now().Add(5 * time.Minute)})
 	}

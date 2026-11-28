@@ -1,6 +1,6 @@
 { ... }:
 {
-  flake.lib.vendorHash = "sha256-fCnCfcfyXY18o1bArZyKbL48iLcoAv6B6Q5FrZuD4hI=";
+  flake.lib.vendorHash = "sha256-8ZdlbubbQ/JFo2odJSeoFPyqSmGEgMg6N25CedmcdEc=";
   systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
   perSystem = { pkgs, self', ... }: {
     packages.default = self'.packages.capensis;

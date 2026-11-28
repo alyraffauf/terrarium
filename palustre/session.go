@@ -18,9 +18,10 @@ import (
 )
 
 type MiniDoc struct {
-	Handle string `json:"handle"`
-	DID    string `json:"did"`
-	PDS    string `json:"pds"`
+	FromDIDDocument bool
+	Handle          string `json:"handle"`
+	DID             string `json:"did"`
+	PDS             string `json:"pds"`
 }
 
 // session owns authentication and the write limiter shared by every list.
