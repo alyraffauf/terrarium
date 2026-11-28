@@ -379,10 +379,12 @@ func TestInterruptedBacklinkWalkPreservesOverdueRetry(t *testing.T) {
 	}
 }
 
-// Each step changes one external fact or advances the clock, then completes a scan.
+// Each step changes one external fact or advances the clock, then runs a scan. The high bit interrupts backlink pagination.
 func FuzzLikerVerificationHistory(f *testing.F) {
 	f.Add([]byte{0, 2, 3, 5, 5, 4, 1})          // Keep a member during an outage, then recover.
 	f.Add([]byte{2, 0, 8, 3, 5, 5, 1, 0, 6, 7}) // Retry a newcomer while another joins.
+	f.Add([]byte{0, 129, 1})                    // Delay removal until a complete scan.
+	f.Add([]byte{2, 0, 129, 128, 3, 5})         // Preserve a pending retry across a missing page.
 	f.Fuzz(func(t *testing.T, history []byte) {
 		repo := testRepository{likes: map[string]bool{}, links: map[string]string{}, unavailable: map[string]bool{}, verificationReads: map[string]int{}, items: map[string]remoteItem{}}
 		var members [3]bool
@@ -390,7 +392,13 @@ func FuzzLikerVerificationHistory(f *testing.F) {
 		minute := 0
 		actors := [3]string{"did:example:a", "did:example:b", "did:example:c"}
 		for step, b := range history[:min(32, len(history))] {
-			did := actors[int(b/8)%len(actors)]
+			previousMembers, previousWrites := members, repo.writes
+			interrupted := b&128 != 0
+			repo.fault = 0
+			if interrupted {
+				repo.fault = 7
+			}
+			did := actors[int((b&127)/8)%len(actors)]
 			switch b % 8 {
 			case 0:
 				repo.links[did] = post
@@ -411,6 +419,8 @@ func FuzzLikerVerificationHistory(f *testing.F) {
 			}
 			for i, actor := range actors {
 				switch {
+				case !repo.likes[actor] && repo.links[actor] == "" && interrupted:
+					continue
 				case repo.likes[actor] || repo.links[actor] == "":
 					members[i] = repo.likes[actor]
 					delay[i] = 0
@@ -427,8 +437,17 @@ func FuzzLikerVerificationHistory(f *testing.F) {
 					}
 				}
 			}
-			if err := repo.scanAt(t.Context(), time.Unix(int64(minute)*60, 0)); err != nil {
-				t.Fatal(err)
+			if err := repo.scanAt(t.Context(), time.Unix(int64(minute)*60, 0)); (err != nil) != interrupted {
+				t.Fatalf("step %d: interrupted=%t, scan error=%v", step, interrupted, err)
+			}
+			writes := 0
+			for i := range members {
+				if members[i] != previousMembers[i] {
+					writes++
+				}
+			}
+			if got := repo.writes - previousWrites; got != writes {
+				t.Fatalf("step %d: membership writes=%d, want %d", step, got, writes)
 			}
 			counts := map[string]int{}
 			for _, item := range repo.items {
