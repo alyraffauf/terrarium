@@ -175,11 +175,12 @@ func (repo *testRepository) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 }
 
-func (repo *testRepository) scan(ctx context.Context) error {
+func (repo *testRepository) scan(ctx context.Context) error { return repo.scanAt(ctx, time.Now()) }
+func (repo *testRepository) scanAt(ctx context.Context, now time.Time) error {
 	client := &xrpc.Client{Host: "https://repo.test", Client: &http.Client{Transport: repo}, Auth: &xrpc.AuthInfo{Did: owner}}
 	api := &palustre.Session{HTTP: client.Client, Client: client, Refreshed: time.Now(), Config: palustre.Config{WriteInterval: time.Nanosecond}}
 	repo.postScan.post, repo.postScan.list = post, list
-	return repo.postScan.sync(ctx, &ownerSession{Session: api}, client, client.Host)
+	return repo.postScan.sync(ctx, &ownerSession{Session: api}, client, client.Host, func() time.Time { return now })
 }
 
 func FuzzLikerMembership(f *testing.F) {
@@ -376,4 +377,68 @@ func TestInterruptedBacklinkWalkPreservesOverdueRetry(t *testing.T) {
 	if got := repo.postScan.retries[key].failures; got != 5 {
 		t.Fatalf("failure count after interrupted walk = %d, want 5", got)
 	}
+}
+
+// Each step changes one external fact or advances the clock, then completes a scan.
+func FuzzLikerVerificationHistory(f *testing.F) {
+	f.Add([]byte{0, 2, 3, 5, 5, 4, 1})          // Keep a member during an outage, then recover.
+	f.Add([]byte{2, 0, 8, 3, 5, 5, 1, 0, 6, 7}) // Retry a newcomer while another joins.
+	f.Fuzz(func(t *testing.T, history []byte) {
+		repo := testRepository{likes: map[string]bool{}, links: map[string]string{}, unavailable: map[string]bool{}, verificationReads: map[string]int{}, items: map[string]remoteItem{}}
+		var members [3]bool
+		var probes, nextProbe, delay [3]int
+		minute := 0
+		actors := [3]string{"did:example:a", "did:example:b", "did:example:c"}
+		for step, b := range history[:min(32, len(history))] {
+			did := actors[int(b/8)%len(actors)]
+			switch b % 8 {
+			case 0:
+				repo.links[did] = post
+			case 1:
+				delete(repo.links, did)
+			case 2:
+				repo.unavailable[did] = true
+			case 3:
+				delete(repo.unavailable, did)
+			case 4:
+				minute += 60
+			case 5:
+				minute++
+			case 6:
+				repo.likes[did] = true
+			case 7:
+				delete(repo.likes, did)
+			}
+			for i, actor := range actors {
+				switch {
+				case repo.likes[actor] || repo.links[actor] == "":
+					members[i] = repo.likes[actor]
+					delay[i] = 0
+					nextProbe[i] = 0
+				case minute >= nextProbe[i]:
+					probes[i]++
+					if repo.unavailable[actor] {
+						delay[i] = min(60, max(1, 2*delay[i]))
+						nextProbe[i] = minute + delay[i]
+					} else {
+						members[i] = true
+						delay[i] = 0
+						nextProbe[i] = 0
+					}
+				}
+			}
+			if err := repo.scanAt(t.Context(), time.Unix(int64(minute)*60, 0)); err != nil {
+				t.Fatal(err)
+			}
+			counts := map[string]int{}
+			for _, item := range repo.items {
+				counts[item.Subject]++
+			}
+			for i, actor := range actors {
+				if (counts[actor] == 1) != members[i] || counts[actor] > 1 || repo.verificationReads[actor] != probes[i] {
+					t.Fatalf("step %d %s: members=%d probes=%d, want member=%t probes=%d", step, actor, counts[actor], repo.verificationReads[actor], members[i], probes[i])
+				}
+			}
+		}
+	})
 }

@@ -101,7 +101,7 @@ type postScan struct {
 	retries    map[likeRecordKey]verificationRetry
 }
 
-func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Client, constellation string) error {
+func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Client, constellation string, now func() time.Time) error {
 	post, list := scan.post, scan.list
 	partition := api.inventories.request(list)
 	defer partition.close()
@@ -128,7 +128,7 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	if appErr != nil {
 		clear(likers)
 	}
-	uncertain, linkErr := scan.backlinks(ctx, api.Session, constellation, likers)
+	uncertain, linkErr := scan.backlinks(ctx, api.Session, constellation, likers, now)
 	discoveryErr := errors.Join(appErr, linkErr)
 	items, err := partition.read(ctx, api.reader())
 	if err != nil {
@@ -156,7 +156,7 @@ func (scan *postScan) sync(ctx context.Context, api *ownerSession, view *xrpc.Cl
 	return errors.Join(firstFailure, discoveryErr)
 }
 
-func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endpoint string, likers map[string]bool) (map[string]bool, error) {
+func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endpoint string, likers map[string]bool, now func() time.Time) (map[string]bool, error) {
 	nextRetries := map[likeRecordKey]verificationRetry{}
 	const collection = "app.bsky.feed.like"
 	client := &xrpc.Client{Host: endpoint, Client: api.HTTP}
@@ -174,7 +174,7 @@ func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endp
 				continue
 			}
 			retry := scan.retries[key]
-			if time.Now().Before(retry.due) {
+			if now().Before(retry.due) {
 				nextRetries[key] = retry
 				continue
 			}
@@ -184,7 +184,7 @@ func (scan *postScan) backlinks(ctx context.Context, api *palustre.Session, endp
 					return nil, ctx.Err()
 				}
 				delay := palustre.VerificationRetryDelay(retry.failures)
-				nextRetries[key] = verificationRetry{failures: retry.failures + 1, due: time.Now().Add(delay)}
+				nextRetries[key] = verificationRetry{failures: retry.failures + 1, due: now().Add(delay)}
 				slog.Warn("like verification deferred", "post", scan.post, "did", row.Did, "rkey", row.Rkey, "retry_in", delay, "error", err)
 				continue
 			}
@@ -317,7 +317,7 @@ func maintainPost(ctx context.Context, owner *ownerSession, view *xrpc.Client, c
 			err = owner.write(ctx, func() error { return owner.EnsurePostList(ctx, scan.list, scan.post) })
 		}
 		if err == nil {
-			err = scan.sync(ctx, owner, view, cfg.Constellation)
+			err = scan.sync(ctx, owner, view, cfg.Constellation, time.Now)
 		}
 		delay := cfg.RescanInterval
 		if err != nil && ctx.Err() == nil {
